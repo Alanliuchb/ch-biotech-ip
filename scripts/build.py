@@ -341,6 +341,7 @@ td{padding:9px 13px;vertical-align:middle}
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const REG_HIDE = new Set({reg_hide_js});
 const NOW_STR = '{NOW_STR}';
+const TODAY_STR = '{TODAY_STR}';
 const SHEET_NAMES = {{trademark:'{SHEET_NAMES['trademark']}',patent:'{SHEET_NAMES['patent']}',registration:'{SHEET_NAMES['registration']}'}};
 
 function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
@@ -566,8 +567,8 @@ function closeExpMo(e){{if(!e||e.target===document.getElementById('expMo'))docum
 function doMode1Export(){{
   const cols=[...document.querySelectorAll('#expColList input:checked')].map(el=>el.id.replace('exp_',''));
   if(!cols.length){{alert('請至少勾選一個欄位');return;}}
-  const csv='﻿'+[cols.join(','),...RAW.registration.map(r=>cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))].join('\n');
-  dlCSV(csv,'正瀚_產品登記_'+'{TODAY_STR}'.replace(/\//g,'')+'.csv');
+  const csv='﻿'+[cols.join(','),...RAW.registration.map(r=>cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))].join('\\n');
+  dlCSV(csv,'正瀚_產品登記_{TODAY_STR}'.replace(/\//g,'')+'.csv');
 }}
 function doMode2Preview(){{
   document.getElementById('mode2Preview').innerHTML=renderMode2HTML(buildMode2());
@@ -580,8 +581,8 @@ function doMode2Export(){{
     types.forEach(t=>{{const cell=(data[c]&&data[c][t])||{{self:0,help:0}};row.push(`自行${{cell.self}}/協助${{cell.help}}`);tot+=cell.self+cell.help;}});
     row.push(tot);return row;
   }});
-  const csv='﻿'+[hdr.join(','),...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
-  dlCSV(csv,'正瀚_產品登記彙總_'+'{TODAY_STR}'.replace(/\//g,'')+'.csv');
+  const csv='﻿'+[hdr.join(','),...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
+  dlCSV(csv,'正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'')+'.csv');
 }}
 function buildMode2(){{
   const CH='CH Biotech R&D Co., Ltd';

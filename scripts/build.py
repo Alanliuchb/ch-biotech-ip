@@ -563,7 +563,8 @@ document.getElementById('nba').textContent = ALL.filter(r => ALERT_DL.has(r._dl)
 
 function renderOv() {{
   const tm = RAW.trademark, pt = RAW.patent, rg = RAW.registration;
-  const tmReg = tm.filter(r=>r._status==='註冊案').length;
+  const tmGet = tm.filter(r=>r._status==='註冊案' || String(r['狀態/進度說明']||'').includes('已取證') || String(r['狀態/進度說明']||'').includes('已取得')).length;
+  const tmApply = tm.filter(r=>{{ const s=String(r['狀態/進度說明']||''); return s.includes('核駁案') || s.includes('審查中'); }}).length;
   const ptGet = pt.filter(r=>r._status==='已取得').length;
   const rgGet = rg.filter(r=>r._status==='已取得').length;
   const tmOver = tm.filter(r=>r._deadline_status==='期限已過').length;
@@ -585,7 +586,7 @@ function renderOv() {{
         </div>`).join('')+'</div>';
 
   return `<div class="ov-grid">
-    <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">註冊案 ${{tmReg}} ／ 其他 ${{tm.length-tmReg}}</div></div>
+    <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">已取證 ${{tmGet}} ／ 申請中 ${{tmApply}}</div></div>
     <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
     <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
   </div>
@@ -613,7 +614,6 @@ function renderTrademark() {{
   const countries = [...new Set(RAW.trademark.map(r=>r['國別']).filter(Boolean))].sort();
   const tmStatuses = [...new Set(RAW.trademark.map(r=>r['狀態/進度說明']||r._status).filter(Boolean))].sort();
 
-  const syncBar = `<div class="sync-bar">⇄ 同步時間：${{NOW_STR}}　·　來源：${{SHEET_NAMES.trademark}}</div>`;
   const fbar = `<div class="fbar">
     <input type="text" placeholder="搜尋商標名稱、申請案號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
     <select onchange="setF('country',this.value)">
@@ -637,9 +637,8 @@ function renderTrademark() {{
         const appNo = r['申請號']||r['申請案號']||'—';
         const regNo = r['註冊編號']||r['註冊號']||r['證書號 (進度)']||r['證書號(進度)']||'—';
         const cls = r['申請類別']||r['類別']||'';
-        const brand = r['商標分類']||'';
         return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-          <td><div style="display:flex;align-items:flex-start">${{imgTag}}<div><div class="tm-name">${{esc(name)}}</div><div class="cs">商標分類：${{esc(brand||'—')}}</div></div></div></td>
+          <td><div style="display:flex;align-items:flex-start">${{imgTag}}<div><div class="tm-name">${{esc(name)}}</div></div></div></td>
           <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
           <td style="font-size:12px">${{esc(cls)}}</td>
           <td>${{badge(r['狀態/進度說明']||r._status,'b-'+(r['狀態/進度說明']||r._status))}}</td>
@@ -649,7 +648,7 @@ function renderTrademark() {{
         </tr>`;
       }}).join('');
 
-  return syncBar + fbar + `<div class="twrap"><table>
+  return fbar + `<div class="twrap"><table>
     <thead><tr>
       <th onclick="sortBy('_name')">商標名</th>
       <th onclick="sortBy('_country')">國別</th>

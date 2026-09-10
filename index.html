@@ -8,6 +8,7 @@
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;background:#f0f2f5;color:#1a1a2e;display:flex;height:100vh;overflow:hidden}
 #sidebar{width:220px;min-width:220px;background:#0f1629;color:#c8d0e0;display:flex;flex-direction:column;height:100vh;overflow-y:auto;flex-shrink:0}
+#main{min-width:0}
 .brand{padding:24px 20px 16px;border-bottom:1px solid #1e2a4a}
 .brand-logo{font-size:22px;font-weight:800;color:#fff;letter-spacing:2px}
 .brand-sub{font-size:10px;color:#6b7a99;margin-top:3px;letter-spacing:1px}
@@ -110,6 +111,35 @@ td{padding:9px 13px;vertical-align:middle}
 .lock-card button{width:100%;border:0;border-radius:8px;padding:11px;background:#315bdc;color:#fff;font-size:14px;cursor:pointer}
 .lock-error{height:18px;color:#d9485f;font-size:12px;margin-top:10px}
 body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
+@media (max-width:900px){
+  body{display:block;height:auto;min-height:100vh;overflow:auto}
+  #sidebar{width:100%;min-width:0;height:auto;overflow:visible;position:relative}
+  .brand{padding:14px 18px 10px;display:flex;align-items:center;gap:10px}
+  .brand-logo{font-size:20px}.brand-sub{margin-top:2px}.brand-title{margin:0 0 0 4px}
+  .nav{padding:6px 8px;display:flex;align-items:center;gap:4px;overflow-x:auto;flex:none}
+  .nav-section{display:none}
+  .nav-item{flex:0 0 auto;padding:9px 11px;border-left:0;border-bottom:3px solid transparent;font-size:12px;white-space:nowrap}
+  .nav-item:hover,.nav-item.active{border-left-color:transparent;border-bottom-color:#4c6ef5}
+  .sidebar-footer{display:none}
+  #main{min-height:calc(100vh - 92px);overflow:visible}
+  .content{padding:20px}
+  .twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .twrap table{min-width:720px}
+  .plist{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .pr{min-width:560px}
+}
+@media (max-width:600px){
+  .brand{padding:12px 14px 9px}.brand-title{font-size:11px}
+  .nav{padding:5px 6px}.nav-item{padding:8px 9px;font-size:11.5px}.nav-badge{font-size:10px;padding:1px 5px;margin-left:5px}
+  .topbar{padding:11px 14px}.topbar-left{font-size:12px}.btn-outline,.btn-primary{padding:7px 11px;font-size:12px}
+  .content{padding:12px}.ov-grid{grid-template-columns:1fr;gap:10px;margin-bottom:18px}
+  .card{padding:14px 16px}.card-value{font-size:24px}
+  .fbar{padding:10px;gap:7px}.fbar input{width:100%;flex:1 1 100%}.fbar select{flex:1;min-width:0}.frs{padding:5px 6px}.rcount{width:100%;margin-left:0;text-align:right}
+  .twrap table{min-width:700px;font-size:12px}.twrap td{padding:8px 10px}.twrap thead th{padding:9px 10px}
+  .section-title{font-size:14px}.pr{min-width:530px;font-size:12px}.pr>div{padding:9px 10px}
+  .modal{width:100%;max-width:100vw;max-height:100vh;border-radius:0}.mh{padding:13px 16px}.mbody{padding:15px 16px}.dg{grid-template-columns:1fr;gap:9px}
+  .lock-card{padding:26px 22px}
+}
 .sc{background:#fff;border-radius:10px;border:1px solid #e8edf5;padding:20px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .sc h3{font-size:14px;font-weight:600;margin-bottom:10px}
 .ibox{background:#eff3ff;border:1px solid #c5d2f6;border-radius:8px;padding:12px 14px;font-size:13px;color:#3b5bdb;line-height:1.5}
@@ -154,7 +184,7 @@ body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
     <div class="nav-section" style="margin-top:10px">設定</div>
     <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：2026/09/10 16:41<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：2026/09/10 16:58<br>© 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -219,8 +249,8 @@ if (sessionStorage.getItem('chb_ip_access') === PASS_HASH) {
   document.getElementById('app-lock').remove();
 }
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const REG_HIDE = new Set(["crops", "raw materials", "organic matter", "n-p-k", "others"]);
-const NOW_STR = '2026/09/10 16:41';
+const REG_HIDE = new Set(["crops", "raw materials", "n-p-k", "organic matter", "others"]);
+const NOW_STR = '2026/09/10 16:58';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
   patent:    '專利進度管理表',
@@ -280,7 +310,7 @@ function render() {
   }
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
-<div class="di"><label>最後同步時間</label><div class="dv">2026/09/10 16:41</div></div>
+<div class="di"><label>最後同步時間</label><div class="dv">2026/09/10 16:58</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">192 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">152 筆</div></div>

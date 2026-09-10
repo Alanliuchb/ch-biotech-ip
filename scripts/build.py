@@ -499,7 +499,6 @@ async function unlockApp(e) {{
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.value));
   const hash = Array.from(new Uint8Array(bytes)).map(b=>b.toString(16).padStart(2,'0')).join('');
   if (hash === PASS_HASH) {{
-    sessionStorage.setItem('chb_ip_access', PASS_HASH);
     document.body.classList.remove('locked');
     document.getElementById('app-lock').remove();
   }} else {{
@@ -507,10 +506,6 @@ async function unlockApp(e) {{
     input.value = '';
     input.focus();
   }}
-}}
-if (sessionStorage.getItem('chb_ip_access') === PASS_HASH) {{
-  document.body.classList.remove('locked');
-  document.getElementById('app-lock').remove();
 }}
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const REG_HIDE = new Set({reg_hide_js});

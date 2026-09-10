@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""正瀚生技 智財與登記管理 v2 - 自動更新腳本"""
+"""正瀚生技 智財與登記管理 v2 - 自動更新腳本 (修復穩定版)"""
 import json, datetime, urllib.request, ssl, io, sys, os
 
 URLS = {
@@ -19,6 +19,7 @@ _TW = datetime.timezone(datetime.timedelta(hours=8))
 _NOW_TW = datetime.datetime.now(datetime.timezone.utc).astimezone(_TW)
 TODAY = _NOW_TW.date()
 TODAY_STR = TODAY.strftime('%Y/%m/%d')
+TODAY_FILE_STR = TODAY.strftime('%Y%m%d')
 NOW_STR = _NOW_TW.strftime('%Y/%m/%d %H:%M')
 
 
@@ -35,13 +36,26 @@ def download_excel(name, url):
         sys.exit(1)
 
 
-def read_excel_rows(data, header_row=1):
+def read_excel_rows(data, expected_keys=None, fallback_header_row=1):
+    """具備自適應偵測標題列的 Excel 讀取函式"""
     import openpyxl
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     ws = wb.active
     all_rows = list(ws.iter_rows(values_only=True))
+    if not all_rows:
+        return []
+
+    header_row = fallback_header_row
+    if expected_keys:
+        for idx in range(min(4, len(all_rows))):
+            row_vals = {str(v).strip() for v in all_rows[idx] if v is not None}
+            if len(row_vals & expected_keys) >= 2:
+                header_row = idx
+                break
+
     if len(all_rows) < header_row + 1:
         return []
+
     headers = [str(h).strip() if h is not None else '' for h in all_rows[header_row]]
     records = []
     for row in all_rows[header_row + 1:]:
@@ -368,6 +382,7 @@ td{padding:9px 13px;vertical-align:middle}
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const REG_HIDE = new Set({reg_hide_js});
 const NOW_STR = '{NOW_STR}';
+const TODAY_FILE_STR = '{TODAY_FILE_STR}';
 const SHEET_NAMES = {{
   trademark: '{SHEET_NAMES['trademark']}',
   patent:    '{SHEET_NAMES['patent']}',
@@ -389,6 +404,13 @@ function dlBadge(s) {{ return badge(s, dlCls(s)); }}
 let pg = 'overview', cur = 1, pp = 30;
 let flt = {{q:'', country:'all', tmSt:'all', ptSt:'all', ptType:'all', rgSt:'all', rgType:'all'}};
 let srt = {{col:null, asc:true}};
+
+// 安全儲存當前各視圖渲染的資料集，以 index 觸發 Modal
+const VIEW_DATA = {{
+  ov_pri: [],
+  page_rows: [],
+  alerts: {{}}
+}};
 
 function setF(k, v) {{ flt[k] = v; cur = 1; render(); }}
 function resetF() {{
@@ -418,15 +440,15 @@ function render() {{
   const el = document.getElementById('content');
   const actions = document.getElementById('topbar-actions');
   actions.innerHTML = '';
-  if (pg === 'overview')      el.innerHTML = renderOv();
+  if (pg === 'overview')       el.innerHTML = renderOv();
   else if (pg === 'trademark')  el.innerHTML = renderTrademark();
   else if (pg === 'patent')     el.innerHTML = renderPatent();
   else if (pg === 'registration') {{
     el.innerHTML = renderRegistration();
     actions.innerHTML = '<button class="btn-outline" onclick="openExpMo()">↓ 匯出</button>';
   }}
-  else if (pg === 'alerts')    el.innerHTML = renderAlerts();
-  else if (pg === 'sync')      el.innerHTML = `{sync_section}`;
+  else if (pg === 'alerts')     el.innerHTML = renderAlerts();
+  else if (pg === 'sync')       el.innerHTML = `{sync_section}`;
 }}
 
 // ── Pager ─────────────────────────────────────────────────────────────────
@@ -495,15 +517,18 @@ function renderOv() {{
   const tmSoon = tm.filter(r=>r._deadline_status==='即將到期').length;
   const rgSoon = rg.filter(r=>ALERT_DL.has(r._deadline_status)).length;
   const alertN = ALL.filter(r=>ALERT_DL.has(r._dl)).length;
+  
   const pri = ALL.filter(r=>ALERT_DL.has(r._dl))
     .sort((a,b)=>(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(a._dl)||9)
-                -(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(b._dl)||9))
+                - (['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(b._dl)||9))
     .slice(0,8);
+  
+  VIEW_DATA.ov_pri = pri;
 
   const priRows = pri.length===0
     ? '<div class="plist"><div class="empty">目前無需立即關注的案件 ✓</div></div>'
     : '<div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限</div><div>提醒</div></div>'
-      + pri.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+      + pri.map((r, idx)=>`<div class="pr" onclick="openMoByIndex('ov_pri', ${{idx}})">
           <div><div class="cn">${{esc(r._name)}}</div><div class="cs">${{esc(r._sub)}}</div></div>
           <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
           <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
@@ -514,6 +539,8 @@ function renderOv() {{
     <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">註冊案 ${{tmReg}} ／ 其他 ${{tm.length-tmReg}}</div></div>
     <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
     <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
+    <div class="card${{tmOver>0?' ac':''}}"><div class="card-label">${{tmOver>0?'⚠ ':''}}商標期限已過</div><div class="card-value">${{tmOver}}</div><div class="card-sub">需確認是否延展</div></div>
+    <div class="card${{(tmSoon+rgSoon)>0?' wc':''}}"><div class="card-label">${{(tmSoon+rgSoon)>0?'⏰ ':''}}近期到期提醒</div><div class="card-value">${{alertN}}</div><div class="card-sub">商標 ${{tmSoon}} ・ 登記 ${{rgSoon}}</div></div>
   </div>
   <div class="section-title">優先關注事項</div>
   ${{priRows}}`;
@@ -536,9 +563,10 @@ function renderTrademark() {{
   const total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
   const rows = d.slice((cur-1)*pp, cur*pp);
+  VIEW_DATA.page_rows = rows;
   const countries = [...new Set(RAW.trademark.map(r=>r['國別']).filter(Boolean))].sort();
 
-  const syncBar = `<div class="sync-bar">⇄ 同步時間：${{NOW_STR}}　·　來源：${{SHEET_NAMES.trademark}}</div>`;
+  const syncBar = `<div class="sync-bar">⇄ 同步時間：${{NOW_STR}} · 來源：${{SHEET_NAMES.trademark}}</div>`;
   const fbar = `<div class="fbar">
     <input type="text" placeholder="搜尋商標名稱、申請案號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
     <select onchange="setF('country',this.value)">
@@ -555,7 +583,7 @@ function renderTrademark() {{
 
   const tbody = rows.length===0
     ? `<tr><td colspan="7"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => {{
+    : rows.map((r, idx) => {{
         const name = r['商標']||r['商標案件']||r['商標名稱']||'—';
         const imgUrl = r['商標圖示']||r['圖片URL']||r['圖片']||'';
         const imgTag = imgUrl ? `<img src="${{esc(imgUrl)}}" style="width:28px;height:28px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:4px">` : '';
@@ -563,7 +591,7 @@ function renderTrademark() {{
         const regNo = r['證書號 (進度)']||r['證書號(進度)']||r['註冊號']||'—';
         const cls = r['申請類別']||r['類別']||'';
         const brand = r['商標分類']||'';
-        return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+        return `<tr onclick="openMoByIndex('page_rows', ${{idx}})">
           <td><div style="display:flex;align-items:center">${{imgTag}}<div><div class="cn">${{esc(name)}}</div><div class="cs">${{esc(brand)}}</div></div></div></td>
           <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
           <td style="font-size:12px">${{esc(cls)}}</td>
@@ -607,6 +635,7 @@ function renderPatent() {{
   const total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
   const rows = d.slice((cur-1)*pp, cur*pp);
+  VIEW_DATA.page_rows = rows;
   const countries = [...new Set(RAW.patent.map(r=>r['國別']).filter(Boolean))].sort();
   const ptTypes = [...new Set(RAW.patent.map(r=>r['專利類別']).filter(Boolean))].sort();
 
@@ -630,7 +659,7 @@ function renderPatent() {{
 
   const tbody = rows.length===0
     ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+    : rows.map((r, idx) => `<tr onclick="openMoByIndex('page_rows', ${{idx}})">
         <td><div style="font-weight:500;color:#1a1a2e">${{esc(r['專利名稱(中文)']||'—')}}</div><div class="cs">${{esc(r['專利類別']||'')}}</div></td>
         <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
         <td style="font-size:12px">${{esc(r['申請案號']||'—')}}</td>
@@ -671,6 +700,7 @@ function renderRegistration() {{
   const total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
   const rows = d.slice((cur-1)*pp, cur*pp);
+  VIEW_DATA.page_rows = rows;
   const countries = [...new Set(RAW.registration.map(r=>r['國別']).filter(Boolean))].sort();
   const rgTypes = [...new Set(RAW.registration.map(r=>r['登記類別']).filter(Boolean))].sort();
   const statuses = [...new Set(RAW.registration.map(r=>r._status).filter(Boolean))].sort();
@@ -694,7 +724,7 @@ function renderRegistration() {{
 
   const tbody = rows.length===0
     ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+    : rows.map((r, idx) => `<tr onclick="openMoByIndex('page_rows', ${{idx}})">
         <td><div class="cn">${{esc(r['登記產品名']||'—')}}</div></td>
         <td style="font-size:12px">${{esc(r['登記類別']||'—')}}</td>
         <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
@@ -721,12 +751,16 @@ function renderAlerts() {{
   const RANKS = ['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'];
   const LABELS = {{'期限已過':'⚠ 期限已過','即將到期':'🟠 6個月內到期','即將到期(30天)':'🔴 30天內到期',
     '即將到期(90天)':'🟠 90天內到期','即將到期(180天)':'🟡 180天內到期','即將到期(365天)':'🟡 365天內到期'}};
+  
+  VIEW_DATA.alerts = {{}};
+
   let html = RANKS.map(dl => {{
     const items = ALL.filter(r=>r._dl===dl);
     if (!items.length) return '';
+    VIEW_DATA.alerts[dl] = items;
     return `<div style="margin-bottom:20px"><div class="section-title">${{LABELS[dl]}} (${{items.length}})</div>
       <div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限日期</div><div>提醒</div></div>
-      ${{items.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+      ${{items.map((r, idx)=>`<div class="pr" onclick="openMoByIndex('alerts_${{dl}}', ${{idx}})">
         <div><div class="cn">${{esc(r._name)}}</div></div>
         <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
         <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
@@ -734,26 +768,50 @@ function renderAlerts() {{
       </div>`).join('')}}
       </div></div>`;
   }}).join('');
+  const na = ALL.filter(r=>r._dl==='N/A');
+  if (na.length) html += `<div style="margin-bottom:20px"><div class="section-title">無到期日 (N/A) (${{na.length}})</div>
+    <div class="ibox">共 ${{na.length}} 件案件登記無期限（N/A），無需展延。</div></div>`;
+  const missing = ALL.filter(r=>r._dl==='待補期限');
+  if (missing.length) html += `<div style="margin-bottom:20px"><div class="section-title">待補期限 (${{missing.length}})</div>
+    <div class="ibox">共 ${{missing.length}} 件案件尚無到期日記錄。</div></div>`;
   return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 ✓</div>';
 }}
 
 // ── Modal ─────────────────────────────────────────────────────────────────
-function openMo(s) {{
-  let r; try {{ r = JSON.parse(s); }} catch {{ return; }}
+function openMoByIndex(source, idx) {{
+  let r = null;
+  if (source === 'ov_pri') {{
+    r = VIEW_DATA.ov_pri[idx];
+  }} else if (source === 'page_rows') {{
+    r = VIEW_DATA.page_rows[idx];
+  }} else if (source.startsWith('alerts_')) {{
+    const dlKey = source.replace('alerts_', '');
+    r = (VIEW_DATA.alerts[dlKey] || [])[idx];
+  }}
+  if (!r) return;
+  openMoDirect(r);
+}}
+
+function openMoDirect(r) {{
   const raw = r._raw || r;
-  const type = r._type || '';
-  document.getElementById('mt').textContent = type + ' 案件明細';
+  let type = r._type || '';
+  if (!type) {{
+    if (raw['商標'] || raw['商標案件'] || raw['商標名稱']) type = '商標';
+    else if (raw['專利名稱(中文)'] || raw['專利編號']) type = '專利';
+    else if (raw['登記產品名']) type = '產品登記';
+  }}
+  document.getElementById('mt').textContent = (type ? type + ' ' : '') + '案件明細';
   const SKIP = new Set(['_status','_end_date','_deadline_status','_start_date','_type','_name','_country','_deadline','_dl','_appNo','_sub','_raw','_cert']);
   const FULL_COLS = new Set(['專利名稱(中文)','專利名稱(英文)','Raw Materials','備註','說明','目前狀態']);
 
   let topHtml = `<div class="dg" style="margin-bottom:14px">`;
   if (type==='商標') {{
     topHtml += `<div class="di"><label>類型</label><div class="dv">${{badge(type,'b-T')}}</div></div>
-    <div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>
+    <div class="di"><label>狀態</label><div class="dv">${{badge(raw._status||'—','b-'+(raw._status||''))}}</div></div>
     <div class="di"><label>使用起始日</label><div class="dv">${{esc(raw._start_date||'—')}}</div></div>
     <div class="di"><label>使用到期日</label><div class="dv">${{esc(raw._end_date||'—')}} ${{dlBadge(raw._deadline_status)}}</div></div>`;
   }} else {{
-    topHtml += `<div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>`;
+    topHtml += `<div class="di"><label>狀態</label><div class="dv">${{badge(raw._status||'—','b-'+(raw._status||''))}}</div></div>`;
   }}
   topHtml += '</div><hr style="border:none;border-top:1px solid #f0f4fa;margin:4px 0 12px"><div class="dg">';
 
@@ -764,11 +822,11 @@ function openMo(s) {{
   document.getElementById('mb').innerHTML = topHtml + items + '</div>';
   document.getElementById('mo').classList.add('open');
 }}
+
 function closeMo(e) {{ if (!e||e.target===document.getElementById('mo')) document.getElementById('mo').classList.remove('open'); }}
 
 // ── Export ────────────────────────────────────────────────────────────────
 function openExpMo() {{
-  // Build column checkboxes from registration data
   const allKeys = new Set();
   RAW.registration.forEach(r => Object.keys(r).forEach(k => {{ if (!k.startsWith('_') && !REG_HIDE.has(k.toLowerCase())) allKeys.add(k); }}));
   const suggested = ['登記產品名','登記類別','國別','登記公司','證書/License ID','取得日期','進度','證書有效期限'];
@@ -786,10 +844,13 @@ function closeExpMo(e) {{ if (!e||e.target===document.getElementById('expMo')) d
 function doMode1Export() {{
   const cols = [...document.querySelectorAll('#expColList input:checked')].map(el => el.id.replace('exp_',''));
   if (!cols.length) {{ alert('請至少勾選一個欄位'); return; }}
-  const csv = '﻿' + [cols.join(','),
-    ...RAW.registration.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
-  ].join('\n');
-  dlCSV(csv, '正瀚_產品登記_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+  const csvLines = [cols.join(',')];
+  RAW.registration.forEach(r => {{
+    const row = cols.map(c => '"' + (r[c]||'').replace(/"/g, '""') + '"');
+    csvLines.push(row.join(','));
+  }});
+  const csv = '\uFEFF' + csvLines.join('\n');
+  dlCSV(csv, '正瀚_產品登記_' + TODAY_FILE_STR + '.csv');
 }}
 
 function doMode2Preview() {{
@@ -812,8 +873,13 @@ function doMode2Export() {{
     row.push(tot);
     return row;
   }});
-  const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
-  dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+  const csvLines = [header.join(',')];
+  rows.forEach(r => {{
+    const row = r.map(v => '"' + String(v).replace(/"/g, '""') + '"');
+    csvLines.push(row.join(','));
+  }});
+  const csv = '\uFEFF' + csvLines.join('\n');
+  dlCSV(csv, '正瀚_產品登記彙總_' + TODAY_FILE_STR + '.csv');
 }}
 
 function buildMode2Table() {{
@@ -868,34 +934,13 @@ pt_data  = download_excel('專利', URLS['patent'])
 rg_data  = download_excel('登記', URLS['registration'])
 
 print('Processing...')
-def _read_tm(data):
-    """商標 Excel 自動偵測標題列（可能在 row 0 或 row 1）"""
-    import openpyxl
-    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
-    ws = wb.active
-    all_rows = list(ws.iter_rows(values_only=True))
-    TM_KEYS = {'商標', '商標案件', '商標名稱', '國別', '申請號', '申請案號',
-               '進度狀況', '進度狀態', '商標分類', '使用期間-到期', '使用期間-到期日'}
-    for hr in range(min(3, len(all_rows))):
-        row_strs = {str(v).strip() for v in all_rows[hr] if v is not None}
-        if len(row_strs & TM_KEYS) >= 2:
-            headers = [str(h).strip() if h is not None else '' for h in all_rows[hr]]
-            records = []
-            for row in all_rows[hr + 1:]:
-                if all(v is None for v in row):
-                    continue
-                rec = {}
-                for h, v in zip(headers, row):
-                    if h:
-                        rec[h] = str(v).strip() if v is not None else ''
-                records.append(rec)
-            print(f'  商標標題列: row {hr}, 欄位: {[h for h in headers if h]}')
-            return records
-    return read_excel_rows(data, header_row=1)
+TM_EXPECTED = {'商標', '商標案件', '商標名稱', '國別', '申請號', '申請案號', '進度狀況', '進度狀態', '商標分類'}
+PT_EXPECTED = {'專利名稱(中文)', '專利名稱(英文)', '國別', '申請案號', '專利編號', '目前狀態'}
+RG_EXPECTED = {'登記產品名', '國別', '登記類別', '登記公司', '證書/License ID', '進度'}
 
-trademark    = process_trademark(_read_tm(tm_data))
-patent       = process_patent(read_excel_rows(pt_data))
-registration = process_registration(read_excel_rows(rg_data))
+trademark    = process_trademark(read_excel_rows(tm_data, expected_keys=TM_EXPECTED, fallback_header_row=0))
+patent       = process_patent(read_excel_rows(pt_data, expected_keys=PT_EXPECTED, fallback_header_row=1))
+registration = process_registration(read_excel_rows(rg_data, expected_keys=RG_EXPECTED, fallback_header_row=1))
 print(f'  商標:{len(trademark)} 專利:{len(patent)} 登記:{len(registration)}')
 
 print('Building HTML...')

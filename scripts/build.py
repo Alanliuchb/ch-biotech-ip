@@ -229,7 +229,7 @@ def process_registration(records):
 
 def build_html(trademark, patent, registration):
     data = {'trademark': trademark, 'patent': patent, 'registration': registration}
-    data_js = json.dumps(data, ensure_ascii=False).replace('</', '<\\/')
+    data_js = json.dumps(data, ensure_ascii=False).replace('</', '<' + chr(92) + '/')
     tm_c = len(trademark)
     pt_c = len(patent)
     rg_c = len(registration)
@@ -478,11 +478,11 @@ function render() {{
   const actions = document.getElementById('topbar-actions');
   actions.innerHTML = '';
   if (pg === 'overview')      el.innerHTML = renderOv();
-  else if (pg === 'trademark')  {{ el.innerHTML = renderTrademark(); actions.innerHTML = '<button class="btn-outline" onclick="openExpMo(\'trademark\')">↓ 匯出</button>'; }}
+  else if (pg === 'trademark')  {{ el.innerHTML = renderTrademark(); actions.innerHTML = `<button class="btn-outline" onclick="openExpMo('trademark')">↓ 匯出</button>`; }}
   else if (pg === 'patent')     el.innerHTML = renderPatent();
   else if (pg === 'registration') {{
     el.innerHTML = renderRegistration();
-    actions.innerHTML = '<button class="btn-outline" onclick="openExpMo(\'registration\')">↓ 匯出</button>';
+    actions.innerHTML = `<button class="btn-outline" onclick="openExpMo('registration')">↓ 匯出</button>`;
   }}
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `{sync_section}`;
@@ -905,7 +905,7 @@ function doMode1Export(fmt) {{
   const csv = '﻿' + [cols.join(','),
     ...rows.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
   ].join('\\n');
-  dlCSV(csv, prefix+'_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+  dlCSV(csv, prefix+'_{TODAY_STR}'.replace(/[/]/g,'') + '.csv');
 }}
 
 function doMode2Preview() {{
@@ -917,7 +917,7 @@ function doMode2Export(fmt) {{
     const tbl=buildTrademarkSummary(), cols=['國別','已取證','申請中','放棄案','合計'];
     if(fmt==='pdf'){{exportPDF('商標狀態／國別彙總',cols,tbl.exportRows);return;}}
     const csv='﻿'+[cols.map(csvCell).join(','),...tbl.exportRows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\\n');
-    dlCSV(csv,'正瀚_商標狀態彙總_{TODAY_STR}'.replace(/\//g,'')+'.csv');
+    dlCSV(csv,'正瀚_商標狀態彙總_{TODAY_STR}'.replace(/[/]/g,'')+'.csv');
     return;
   }}
   const tbl = buildMode2Table();
@@ -944,7 +944,7 @@ function doMode2Export(fmt) {{
   rows.push(totalRow);
   if(fmt==='pdf'){{const pdfRows=rows.map(row=>Object.fromEntries(header.map((h,i)=>[h,row[i]])));exportPDF('產品登記各國類別彙總',header,pdfRows);return;}}
   const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
-  dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+  dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/[/]/g,'') + '.csv');
 }}
 
 function buildTrademarkSummary() {{

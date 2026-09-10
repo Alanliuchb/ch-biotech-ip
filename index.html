@@ -185,7 +185,7 @@ body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
     <div class="nav-section" style="margin-top:10px">設定</div>
     <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：2026/09/10 17:06<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：2026/09/10 17:11<br>© 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -236,7 +236,6 @@ async function unlockApp(e) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.value));
   const hash = Array.from(new Uint8Array(bytes)).map(b=>b.toString(16).padStart(2,'0')).join('');
   if (hash === PASS_HASH) {
-    sessionStorage.setItem('chb_ip_access', PASS_HASH);
     document.body.classList.remove('locked');
     document.getElementById('app-lock').remove();
   } else {
@@ -245,13 +244,9 @@ async function unlockApp(e) {
     input.focus();
   }
 }
-if (sessionStorage.getItem('chb_ip_access') === PASS_HASH) {
-  document.body.classList.remove('locked');
-  document.getElementById('app-lock').remove();
-}
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const REG_HIDE = new Set(["others", "raw materials", "crops", "n-p-k", "organic matter"]);
-const NOW_STR = '2026/09/10 17:06';
+const NOW_STR = '2026/09/10 17:11';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
   patent:    '專利進度管理表',
@@ -311,7 +306,7 @@ function render() {
   }
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
-<div class="di"><label>最後同步時間</label><div class="dv">2026/09/10 17:06</div></div>
+<div class="di"><label>最後同步時間</label><div class="dv">2026/09/10 17:11</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">192 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">152 筆</div></div>

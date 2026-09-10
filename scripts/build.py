@@ -6,7 +6,7 @@
 import json, datetime, urllib.request, ssl, io, sys, os
 
 URLS = {
-    'trademark':    'https://docs.google.com/spreadsheets/d/1MfsBuMHVZDFd_MV1v0LTnUOsYqUGkhVn/export?format=xlsx',
+    'trademark':    'https://docs.google.com/spreadsheets/d/13iX5d_tig149MicN-WvTENS_kTiQjkNb/export?format=xlsx',
     'patent':       'https://docs.google.com/spreadsheets/d/1Uj_PV344NkDiY2n8YCs_HyjpnQYn87Ca/export?format=xlsx',
     'registration': 'https://docs.google.com/spreadsheets/d/1llnfbjcPST6Wa0p6psIxUfnjlGicZEi9/export?format=xlsx',
 }
@@ -27,7 +27,14 @@ NOW_STR = _NOW_TW.strftime('%Y/%m/%d %H:%M')
 
 def download_excel(name, url):
     ctx = ssl.create_default_context()
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (GitHub-Actions)'})
+    # Google Sheets 每次執行都重新下載，避免 GitHub Actions 或中間快取沿用舊檔。
+    sep = '&' if '?' in url else '?'
+    fresh_url = f'{url}{sep}cache_bust={int(_NOW_TW.timestamp())}'
+    req = urllib.request.Request(fresh_url, headers={
+        'User-Agent': 'Mozilla/5.0 (GitHub-Actions; latest-sheet-fetch)',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+    })
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
             data = r.read()
@@ -36,6 +43,15 @@ def download_excel(name, url):
     except Exception as e:
         print(f'  ERROR {name}: {e}', file=sys.stderr)
         sys.exit(1)
+
+
+def format_cell_value(value):
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip() if value is not None else ''
+    return '' if text.startswith('#') else text
 
 
 def read_excel_rows(data, header_row=1):
@@ -53,7 +69,7 @@ def read_excel_rows(data, header_row=1):
         rec = {}
         for h, v in zip(headers, row):
             if h:
-                rec[h] = str(v).strip() if v is not None else ''
+                rec[h] = format_cell_value(v)
         records.append(rec)
     return records
 
@@ -99,11 +115,7 @@ def read_trademark_rows(data):
         record = {}
         for header, value in zip(headers, row):
             if header:
-                if isinstance(value, (datetime.datetime, datetime.date)):
-                    record[header] = value.strftime('%Y-%m-%d')
-                else:
-                    text = str(value).strip() if value is not None else ''
-                    record[header] = '' if text.startswith('#') else text
+                record[header] = format_cell_value(value)
         if any(record.values()):
             records.append(record)
 
@@ -286,6 +298,7 @@ tbody tr:hover{background:#f7f9fd}
 tbody tr:last-child{border-bottom:none}
 td{padding:9px 13px;vertical-align:middle}
 .cn{font-weight:500;color:#1a1a2e;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tm-name{font-weight:500;color:#1a1a2e;white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word;line-height:1.35}
 .cs{font-size:11px;color:#8899bb;margin-top:2px}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11.5px;font-weight:500;white-space:nowrap}
 .b-註冊案{background:#dcfce7;color:#166534}
@@ -353,7 +366,6 @@ td{padding:9px 13px;vertical-align:middle}
 <div class="di"><label>商標案件</label><div class="dv">{tm_c} 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">{pt_c} 筆</div></div>
 <div class="di"><label>產品登記</label><div class="dv">{rg_c} 筆</div></div>
-<div class="di"><label>自動更新</label><div class="dv">✅ 上班時間每小時（週一至週五 8:00–17:00）</div></div>
 </div></div>'''
 
     html = f'''<!DOCTYPE html>
@@ -623,19 +635,19 @@ function renderTrademark() {{
         const cls = r['申請類別']||r['類別']||'';
         const brand = r['商標分類']||'';
         return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-          <td><div style="display:flex;align-items:center">${{imgTag}}<div><div class="cn">${{esc(name)}}</div><div class="cs">${{esc(brand)}}</div></div></div></td>
+          <td><div style="display:flex;align-items:flex-start">${{imgTag}}<div><div class="tm-name">${{esc(name)}}</div><div class="cs">商標分類：${{esc(brand||'—')}}</div></div></div></td>
           <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
           <td style="font-size:12px">${{esc(cls)}}</td>
           <td>${{badge(r['狀態/進度說明']||r._status,'b-'+(r['狀態/進度說明']||r._status))}}</td>
           <td style="font-size:12px;color:#4a5568">${{esc(appNo)}}</td>
           <td style="font-size:12px;color:#4a5568">${{esc(regNo)}}</td>
-          <td>${{r._end_date?`<div style="font-size:11px;color:#6b7a99;margin-bottom:2px">${{esc(r._end_date)}}</div>`:''}}${{dlBadge(r._deadline_status)}}</td>
+          <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'-')}}</td>
         </tr>`;
       }}).join('');
 
   return syncBar + fbar + `<div class="twrap"><table>
     <thead><tr>
-      <th onclick="sortBy('_name')">商標案件</th>
+      <th onclick="sortBy('_name')">商標名</th>
       <th onclick="sortBy('_country')">國別</th>
       <th>申請類別</th>
       <th onclick="sortBy('_status')">狀態/進度說明</th>

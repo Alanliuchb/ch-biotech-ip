@@ -240,7 +240,6 @@ td{padding:9px 13px;vertical-align:middle}
 .b-廢棄案{background:#f3f4f6;color:#6b7280}
 .b-已取得{background:#dcfce7;color:#166534}
 .b-已取證{background:#dcfce7;color:#166534}
-.b-申請中{background:#dbeafe;color:#1d4ed8}
 .b-已結案{background:#f3f4f6;color:#6b7280}
 .b-辦理中{background:#dbeafe;color:#1d4ed8}
 .b-T{background:#f0f4ff;color:#3b5bdb}
@@ -293,13 +292,13 @@ td{padding:9px 13px;vertical-align:middle}
 .mode2-tbl .rc{text-align:left;font-weight:500}
 '''
 
-    sync_section = f'''<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
+    sync_section = f'''<div class="sc"><h3>&#x21C4; 資料同步狀態</h3><div class="dg" style="margin-top:10px">
 <div class="di"><label>最後同步時間</label><div class="dv">{NOW_STR}</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">{tm_c} 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">{pt_c} 筆</div></div>
 <div class="di"><label>產品登記</label><div class="dv">{rg_c} 筆</div></div>
-<div class="di"><label>自動更新</label><div class="dv">✅ 上班時間每小時（週一至週五 8:00–17:00）</div></div>
+<div class="di"><label>自動更新</label><div class="dv">&#x2705; 上班時間每小時（週一至週五 8:00&#x2013;17:00）</div></div>
 </div></div>'''
 
     html = f'''<!DOCTYPE html>
@@ -319,15 +318,15 @@ td{padding:9px 13px;vertical-align:middle}
   </div>
   <nav class="nav">
     <div class="nav-section">管理工作台</div>
-    <div class="nav-item active" onclick="showPage('overview',this)"><span style="flex:1">▦ 主管總覽</span></div>
-    <div class="nav-item" onclick="showPage('trademark',this)"><span style="flex:1">® 商標管理</span><span class="nav-badge">{tm_c}</span></div>
-    <div class="nav-item" onclick="showPage('patent',this)"><span style="flex:1">◇ 專利管理</span><span class="nav-badge">{pt_c}</span></div>
-    <div class="nav-item" onclick="showPage('registration',this)"><span style="flex:1">▤ 產品登記</span><span class="nav-badge">{rg_c}</span></div>
-    <div class="nav-item" onclick="showPage('alerts',this)"><span style="flex:1">◷ 期限提醒</span><span class="nav-badge alert" id="nba">—</span></div>
+    <div class="nav-item active" onclick="showPage('overview',this)"><span style="flex:1">&#x25A6; 主管總覽</span></div>
+    <div class="nav-item" onclick="showPage('trademark',this)"><span style="flex:1">&#xAE; 商標管理</span><span class="nav-badge">{tm_c}</span></div>
+    <div class="nav-item" onclick="showPage('patent',this)"><span style="flex:1">&#x25C7; 專利管理</span><span class="nav-badge">{pt_c}</span></div>
+    <div class="nav-item" onclick="showPage('registration',this)"><span style="flex:1">&#x25A4; 產品登記</span><span class="nav-badge">{rg_c}</span></div>
+    <div class="nav-item" onclick="showPage('alerts',this)"><span style="flex:1">&#x25F7; 期限提醒</span><span class="nav-badge alert" id="nba">&#x2014;</span></div>
     <div class="nav-section" style="margin-top:10px">設定</div>
-    <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
+    <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">&#x21C4; 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：{NOW_STR}<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：{NOW_STR}<br>&#xa9; 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -340,7 +339,7 @@ td{padding:9px 13px;vertical-align:middle}
 <!-- 案件明細 Modal -->
 <div class="mo" id="mo" onclick="closeMo(event)">
   <div class="modal">
-    <div class="mh"><h3 id="mt">案件明細</h3><button class="mclose" onclick="closeMo()">✕</button></div>
+    <div class="mh"><h3 id="mt">案件明細</h3><button class="mclose" onclick="closeMo()">&#x2715;</button></div>
     <div class="mbody" id="mb"></div>
   </div>
 </div>
@@ -348,18 +347,18 @@ td{padding:9px 13px;vertical-align:middle}
 <!-- 產品登記匯出 Modal -->
 <div class="mo" id="expMo" onclick="closeExpMo(event)">
   <div class="modal" style="max-width:740px">
-    <div class="mh"><h3>匯出產品登記資料</h3><button class="mclose" onclick="closeExpMo()">✕</button></div>
+    <div class="mh"><h3>匯出產品登記資料</h3><button class="mclose" onclick="closeExpMo()">&#x2715;</button></div>
     <div class="mbody">
       <div class="exp-section">
         <h4>模式 1：自選欄位匯出</h4>
         <div class="chk-grid" id="expColList"></div>
-        <button class="btn-primary" style="margin-top:8px" onclick="doMode1Export()">↓ 匯出所選欄位 CSV</button>
+        <button class="btn-primary" style="margin-top:8px" onclick="doMode1Export()">&#x2193; 匯出所選欄位 CSV</button>
       </div>
       <hr style="border:none;border-top:1px solid #e8edf5;margin:16px 0">
       <div class="exp-section">
         <h4>模式 2：各國登記類別彙總表（自行取得 vs 協助客戶）</h4>
         <button class="btn-outline" onclick="doMode2Preview()">預覽彙總表</button>
-        <button class="btn-primary" style="margin-left:8px" onclick="doMode2Export()">↓ 匯出彙總表 CSV</button>
+        <button class="btn-primary" style="margin-left:8px" onclick="doMode2Export()">&#x2193; 匯出彙總表 CSV</button>
         <div id="mode2Preview" style="margin-top:14px;overflow-x:auto"></div>
       </div>
     </div>
@@ -385,13 +384,13 @@ function dlCls(s) {{
     '待補期限':'待補期限','日期異常':'日期異常','N/A':'NA'}};
   return 'dl-' + (m[s] || '待補期限');
 }}
-function badge(t, c) {{ return `<span class="badge ${{c}}">${{esc(t)}}</span>`; }}
+function badge(t, c) {{ return '<span class="badge ' + c + '">' + esc(t) + '</span>'; }}
 function dlBadge(s) {{ return badge(s, dlCls(s)); }}
 
 // ── State ─────────────────────────────────────────────────────────────────
-let pg = 'overview', cur = 1, pp = 30;
-let flt = {{q:'', country:'all', tmSt:'all', ptSt:'all', ptType:'all', rgSt:'all', rgType:'all'}};
-let srt = {{col:null, asc:true}};
+var pg = 'overview', cur = 1, pp = 30;
+var flt = {{q:'', country:'all', tmSt:'all', ptSt:'all', ptType:'all', rgSt:'all', rgType:'all'}};
+var srt = {{col:null, asc:true}};
 
 function setF(k, v) {{ flt[k] = v; cur = 1; render(); }}
 function resetF() {{
@@ -404,366 +403,339 @@ function sortBy(c) {{ srt.col===c ? srt.asc=!srt.asc : (srt.col=c, srt.asc=true)
 function goP(n) {{ cur=n; render(); document.getElementById('main').scrollTo(0,0); }}
 
 // ── Page routing ──────────────────────────────────────────────────────────
-const PAGE_TITLES = {{overview:'主管總覽',trademark:'商標管理',patent:'專利管理',
+var PAGE_TITLES = {{overview:'主管總覽',trademark:'商標管理',patent:'專利管理',
   registration:'產品登記',alerts:'期限提醒',sync:'資料與同步'}};
 
 function showPage(n, el) {{
   pg = n; cur = 1;
   Object.assign(flt, {{q:'',country:'all',tmSt:'all',ptSt:'all',ptType:'all',rgSt:'all',rgType:'all'}});
   srt = {{col:null, asc:true}};
-  document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(function(x) {{ x.classList.remove('active'); }});
   if (el) el.classList.add('active');
   document.getElementById('bc').innerHTML = '管理中心 ／ <span>' + PAGE_TITLES[n] + '</span>';
   render();
 }}
 
 function render() {{
-  const el = document.getElementById('content');
-  const actions = document.getElementById('topbar-actions');
+  var el = document.getElementById('content');
+  var actions = document.getElementById('topbar-actions');
   actions.innerHTML = '';
-  if (pg === 'overview')      el.innerHTML = renderOv();
+  if (pg === 'overview')        el.innerHTML = renderOv();
   else if (pg === 'trademark')  el.innerHTML = renderTrademark();
   else if (pg === 'patent')     el.innerHTML = renderPatent();
   else if (pg === 'registration') {{
     el.innerHTML = renderRegistration();
-    actions.innerHTML = '<button class="btn-outline" onclick="openExpMo()">↓ 匯出</button>';
+    actions.innerHTML = '<button class="btn-outline" onclick="openExpMo()">&#x2193; 匯出</button>';
   }}
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
-  else if (pg === 'sync')      el.innerHTML = `{sync_section}`;
+  else if (pg === 'sync')      el.innerHTML = '{sync_section}';
 }}
 
 // ── Pager ─────────────────────────────────────────────────────────────────
 function mkPager(total, pages) {{
   if (pages <= 1) return '';
-  let btns = '', prev = -1;
-  for (let i = 1; i <= pages; i++) {{
+  var btns = '', prev = -1;
+  for (var i = 1; i <= pages; i++) {{
     if (i===1 || i===pages || Math.abs(i-cur)<=2) {{
-      if (prev !== -1 && i-prev > 1) btns += '<span class="pgi">…</span>';
-      btns += `<button class="pgb${{i===cur?' apg':''}}" onclick="goP(${{i}})">${{i}}</button>`;
+      if (prev !== -1 && i-prev > 1) btns += '<span class="pgi">&#x2026;</span>';
+      btns += '<button class="pgb' + (i===cur?' apg':'') + '" onclick="goP(' + i + ')">' + i + '</button>';
       prev = i;
     }}
   }}
-  return `<div class="pgbar">
-    <button class="pgb" onclick="goP(${{cur-1}})" ${{cur===1?'disabled':''}}>‹</button>
-    ${{btns}}
-    <button class="pgb" onclick="goP(${{cur+1}})" ${{cur===pages?'disabled':''}}>›</button>
-    <span class="pgi">${{(cur-1)*pp+1}}–${{Math.min(cur*pp,total)}}/${{total}}</span>
-  </div>`;
+  return '<div class="pgbar">'
+    + '<button class="pgb" onclick="goP(' + (cur-1) + ')"' + (cur===1?' disabled':'') + '>&#x2039;</button>'
+    + btns
+    + '<button class="pgb" onclick="goP(' + (cur+1) + ')"' + (cur===pages?' disabled':'') + '>&#x203a;</button>'
+    + '<span class="pgi">' + ((cur-1)*pp+1) + '&#x2013;' + Math.min(cur*pp,total) + '/' + total + '</span>'
+    + '</div>';
 }}
 
 // ── Sort ──────────────────────────────────────────────────────────────────
 function applySort(d) {{
   if (!srt.col) return d;
-  return [...d].sort((a,b) => {{
-    const va = a[srt.col]||'', vb = b[srt.col]||'';
+  return d.slice().sort(function(a,b) {{
+    var va = a[srt.col]||'', vb = b[srt.col]||'';
     return srt.asc ? (va<vb?-1:va>vb?1:0) : (va>vb?-1:va<vb?1:0);
   }});
 }}
 
 // ── Overview ──────────────────────────────────────────────────────────────
 function buildAll() {{
-  const a = [];
-  RAW.trademark.forEach(r => a.push({{
-    _type:'商標', _name: r['商標']||r['商標案件']||r['商標名稱']||'—',
-    _country: r['國別']||'—', _status: r._status,
+  var a = [];
+  RAW.trademark.forEach(function(r) {{ a.push({{
+    _type:'商標', _name: r['商標']||r['商標案件']||r['商標名稱']||'&#x2014;',
+    _country: r['國別']||'&#x2014;', _status: r._status,
     _deadline: r._end_date||'', _dl: r._deadline_status,
     _appNo: r['申請號']||r['申請案號']||'', _sub: r['商標分類']||'', _raw: r
-  }}));
-  RAW.patent.forEach(r => a.push({{
-    _type:'專利', _name: r['專利名稱(中文)']||'—',
-    _country: r['國別']||'—', _status: r._status,
+  }}); }});
+  RAW.patent.forEach(function(r) {{ a.push({{
+    _type:'專利', _name: r['專利名稱(中文)']||'&#x2014;',
+    _country: r['國別']||'&#x2014;', _status: r._status,
     _deadline: r._end_date||'', _dl: r._deadline_status,
     _appNo: r['申請案號']||'', _sub: r['專利類別']||'', _raw: r
-  }}));
-  RAW.registration.forEach(r => a.push({{
-    _type:'產品登記', _name: r['登記產品名']||'—',
-    _country: r['國別']||'—', _status: r._status,
+  }}); }});
+  RAW.registration.forEach(function(r) {{ a.push({{
+    _type:'產品登記', _name: r['登記產品名']||'&#x2014;',
+    _country: r['國別']||'&#x2014;', _status: r._status,
     _deadline: r._end_date||'', _dl: r._deadline_status,
     _appNo: '', _sub: r['登記類別']||r['登記公司']||'', _raw: r
-  }}));
+  }}); }});
   return a;
 }}
-const ALL = buildAll();
+var ALL = buildAll();
 
 // Alert count
-const ALERT_DL = new Set(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)']);
-document.getElementById('nba').textContent = ALL.filter(r => ALERT_DL.has(r._dl)).length;
+var ALERT_DL = new Set(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)']);
+document.getElementById('nba').textContent = ALL.filter(function(r) {{ return ALERT_DL.has(r._dl); }}).length;
 
 function renderOv() {{
-  const tm = RAW.trademark, pt = RAW.patent, rg = RAW.registration;
-  const tmReg = tm.filter(r=>r._status==='已取得').length;
-  const ptGet = pt.filter(r=>r._status==='已取得').length;
-  const rgGet = rg.filter(r=>r._status==='已取得').length;
-  const tmOver = tm.filter(r=>r._deadline_status==='期限已過').length;
-  const tmSoon = tm.filter(r=>r._deadline_status==='即將到期').length;
-  const rgSoon = rg.filter(r=>ALERT_DL.has(r._deadline_status)).length;
-  const alertN = ALL.filter(r=>ALERT_DL.has(r._dl)).length;
-  const pri = ALL.filter(r=>ALERT_DL.has(r._dl))
-    .sort((a,b)=>(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(a._dl)||9)
-                -(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(b._dl)||9))
-    .slice(0,8);
+  var tm = RAW.trademark, pt = RAW.patent, rg = RAW.registration;
+  var tmReg = tm.filter(function(r){{return r._status==='已取得';}}).length;
+  var ptGet = pt.filter(function(r){{return r._status==='已取得';}}).length;
+  var rgGet = rg.filter(function(r){{return r._status==='已取得';}}).length;
+  var pri = ALL.filter(function(r){{return ALERT_DL.has(r._dl);}})
+    .sort(function(a,b){{
+      var rank=['期限已過','即將到期','即將到期(30天)','即將到期(90天)'];
+      var ai=rank.indexOf(a._dl); var bi=rank.indexOf(b._dl);
+      return (ai<0?99:ai)-(bi<0?99:bi);
+    }}).slice(0,8);
 
-  const priRows = pri.length===0
-    ? '<div class="plist"><div class="empty">目前無需立即關注的案件 ✓</div></div>'
-    : '<div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限</div><div>提醒</div></div>'
-      + pri.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-          <div><div class="cn">${{esc(r._name)}}</div><div class="cs">${{esc(r._sub)}}</div></div>
-          <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
-          <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
-          <div>${{dlBadge(r._dl)}}</div>
-        </div>`).join('')+'</div>';
+  var priRows = pri.length===0
+    ? '<div class="plist"><div class="empty">目前無需立即關注的案件 &#x2713;</div></div>'
+    : '<div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型&#x30FB;國別</div><div>期限</div><div>提醒</div></div>'
+      + pri.map(function(r){{
+          return '<div class="pr" onclick=\'openMo(\'' + esc(JSON.stringify(r)) + '\')\''
+            + '><div><div class="cn">' + esc(r._name) + '</div><div class="cs">' + esc(r._sub) + '</div></div>'
+            + '<div style="font-size:12px">' + esc(r._type+'&#x30FB;'+r._country) + '</div>'
+            + '<div style="font-size:12px;color:#6b7a99">' + esc(r._deadline||'&#x2014;') + '</div>'
+            + '<div>' + dlBadge(r._dl) + '</div></div>';
+        }}).join('') + '</div>';
 
-  return `<div class="ov-grid">
-    <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">註冊案 ${{tmReg}} ／ 其他 ${{tm.length-tmReg}}</div></div>
-    <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
-    <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
-  </div>
-  <div class="section-title">優先關注事項</div>
-  ${{priRows}}`;
+  return '<div class="ov-grid">'
+    + '<div class="card"><div class="card-label">&#xAE; 商標</div><div class="card-value">' + tm.length + '</div><div class="card-sub">已取得 ' + tmReg + ' ／ 其他 ' + (tm.length-tmReg) + '</div></div>'
+    + '<div class="card"><div class="card-label">&#x25C7; 專利</div><div class="card-value">' + pt.length + '</div><div class="card-sub">已取得 ' + ptGet + ' ／ 申請中 ' + (pt.length-ptGet) + '</div></div>'
+    + '<div class="card"><div class="card-label">&#x25A4; 產品登記</div><div class="card-value">' + rg.length + '</div><div class="card-sub">已取得 ' + rgGet + ' ／ 辦理中 ' + (rg.length-rgGet) + '</div></div>'
+    + '</div><div class="section-title">優先關注事項</div>' + priRows;
 }}
 
 // ── Trademark ─────────────────────────────────────────────────────────────
 function renderTrademark() {{
-  let d = [...RAW.trademark];
+  var d = RAW.trademark.slice();
   if (flt.q) {{
-    const q = flt.q.toLowerCase();
-    d = d.filter(r =>
-      (r['商標']||r['商標案件']||r['商標名稱']||'').toLowerCase().includes(q) ||
-      (r['申請號']||r['申請案號']||'').toLowerCase().includes(q) ||
-      (r['國別']||'').toLowerCase().includes(q));
+    var q = flt.q.toLowerCase();
+    d = d.filter(function(r) {{
+      return (r['商標']||r['商標案件']||r['商標名稱']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['申請號']||r['申請案號']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['國別']||'').toLowerCase().indexOf(q)>=0;
+    }});
   }}
-  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
-  if (flt.tmSt!=='all') d = d.filter(r=>r._status===flt.tmSt);
+  if (flt.country!=='all') d = d.filter(function(r){{return r['國別']===flt.country;}});
+  if (flt.tmSt!=='all') d = d.filter(function(r){{return r._status===flt.tmSt;}});
   d = applySort(d);
 
-  const total = d.length, pages = Math.ceil(total/pp)||1;
+  var total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
-  const rows = d.slice((cur-1)*pp, cur*pp);
-  const countries = [...new Set(RAW.trademark.map(r=>r['國別']).filter(Boolean))].sort();
+  var rows = d.slice((cur-1)*pp, cur*pp);
+  var countries = [];
+  RAW.trademark.forEach(function(r){{ if(r['國別'] && countries.indexOf(r['國別'])<0) countries.push(r['國別']); }});
+  countries.sort();
 
-  const syncBar = `<div class="sync-bar">⇄ 同步時間：${{NOW_STR}}　·　來源：${{SHEET_NAMES.trademark}}</div>`;
-  const fbar = `<div class="fbar">
-    <input type="text" placeholder="搜尋商標名稱、申請案號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
-    <select onchange="setF('country',this.value)">
-      <option value="all">所有國別</option>
-      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
-    </select>
-    <select onchange="setF('tmSt',this.value)">
-      <option value="all">所有進度</option>
-      ${{['已取得','審查中','核駁案','放棄案'].map(s=>`<option value="${{s}}"${{flt.tmSt===s?' selected':''}}>${{s}}</option>`).join('')}}
-    </select>
-    <span class="frs" onclick="resetF()">重設</span>
-    <span class="rcount">共 ${{total}} 筆${{total!==RAW.trademark.length?' (全 '+RAW.trademark.length+')':''}}</span>
-  </div>`;
+  var syncBar = '<div class="sync-bar">&#x21C4; 同步時間：' + NOW_STR + '&#x3000;&#xB7;&#x3000;來源：' + SHEET_NAMES.trademark + '</div>';
+  var fbar = '<div class="fbar">'
+    + '<input type="text" placeholder="搜尋商標名稱、申請案號&#x2026;" oninput="setF(\'q\',this.value)" value="' + esc(flt.q) + '">'
+    + '<select onchange="setF(\'country\',this.value)"><option value="all">所有國別</option>'
+    + countries.map(function(c){{return '<option value="'+esc(c)+'"'+(flt.country===c?' selected':'')+'>'+esc(c)+'</option>';}}).join('')
+    + '</select>'
+    + '<select onchange="setF(\'tmSt\',this.value)"><option value="all">所有進度</option>'
+    + ['已取得','審查中','核駁案','放棄案'].map(function(s){{return '<option value="'+s+'"'+(flt.tmSt===s?' selected':'')+'>'+s+'</option>';}}).join('')
+    + '</select>'
+    + '<span class="frs" onclick="resetF()">重設</span>'
+    + '<span class="rcount">共 ' + total + ' 筆' + (total!==RAW.trademark.length?' (全 '+RAW.trademark.length+')':'') + '</span>'
+    + '</div>';
 
-  const tbody = rows.length===0
-    ? `<tr><td colspan="7"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => {{
-        const name = r['商標']||r['商標案件']||r['商標名稱']||'—';
-        const imgUrl = r['商標圖示']||r['圖片URL']||r['圖片']||'';
-        const imgTag = imgUrl ? `<img src="${{esc(imgUrl)}}" style="width:28px;height:28px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:4px">` : '';
-        const appNo = r['申請號']||r['申請案號']||'—';
-        const regNo = r['註冊編號']||r['證書號 (進度)']||r['證書號(進度)']||r['註冊號']||'—';
-        const cls = r['申請類別']||r['類別']||'';
-        const brand = r['商標分類']||'';
-        return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-          <td><div style="display:flex;align-items:center">${{imgTag}}<div><div class="cn">${{esc(name)}}</div><div class="cs">${{esc(brand)}}</div></div></div></td>
-          <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
-          <td style="font-size:12px">${{esc(cls)}}</td>
-          <td>${{badge(r._status,'b-'+r._status)}}</td>
-          <td style="font-size:12px;color:#4a5568">${{esc(appNo)}}</td>
-          <td style="font-size:12px;color:#4a5568">${{esc(regNo)}}</td>
-          <td>${{r._end_date?`<div style="font-size:11px;color:#6b7a99;margin-bottom:2px">${{esc(r._end_date)}}</div>`:''}}${{dlBadge(r._deadline_status)}}</td>
-        </tr>`;
+  var tbody = rows.length===0
+    ? '<tr><td colspan="7"><div class="empty">無符合條件的案件</div></td></tr>'
+    : rows.map(function(r) {{
+        var name = r['商標']||r['商標案件']||r['商標名稱']||'&#x2014;';
+        var appNo = r['申請號']||r['申請案號']||'&#x2014;';
+        var regNo = r['註冊編號']||r['證書號 (進度)']||r['證書號(進度)']||r['註冊號']||'&#x2014;';
+        var cls = r['申請類別']||r['類別']||'';
+        var brand = r['商標分類']||'';
+        return '<tr onclick=\'openMo(\'' + esc(JSON.stringify(r)) + '\')\'>'
+          + '<td><div class="cn">' + esc(name) + '</div><div class="cs">' + esc(brand) + '</div></td>'
+          + '<td style="font-size:12px">' + esc(r['國別']||'&#x2014;') + '</td>'
+          + '<td style="font-size:12px">' + esc(cls) + '</td>'
+          + '<td>' + badge(r._status,'b-'+r._status) + '</td>'
+          + '<td style="font-size:12px;color:#4a5568">' + esc(appNo) + '</td>'
+          + '<td style="font-size:12px;color:#4a5568">' + esc(regNo) + '</td>'
+          + '<td>' + (r._end_date?'<div style="font-size:11px;color:#6b7a99;margin-bottom:2px">'+esc(r._end_date)+'</div>':'') + dlBadge(r._deadline_status) + '</td>'
+          + '</tr>';
       }}).join('');
 
-  return syncBar + fbar + `<div class="twrap"><table>
-    <thead><tr>
-      <th onclick="sortBy('_name')">商標案件</th>
-      <th onclick="sortBy('_country')">國別</th>
-      <th>類別</th>
-      <th onclick="sortBy('_status')">進度狀態</th>
-      <th>申請案號</th>
-      <th>證書號／進度</th>
-      <th onclick="sortBy('_end_date')">使用期限</th>
-    </tr></thead>
-    <tbody>${{tbody}}</tbody>
-  </table>${{mkPager(total,pages)}}</div>`;
+  return syncBar + fbar + '<div class="twrap"><table>'
+    + '<thead><tr>'
+    + '<th onclick="sortBy(\'_name\')">商標案件</th>'
+    + '<th onclick="sortBy(\'_country\')">國別</th>'
+    + '<th>類別</th>'
+    + '<th onclick="sortBy(\'_status\')">進度狀態</th>'
+    + '<th>申請案號</th>'
+    + '<th>證書號／進度</th>'
+    + '<th onclick="sortBy(\'_end_date\')">使用期限</th>'
+    + '</tr></thead><tbody>' + tbody + '</tbody></table>' + mkPager(total,pages) + '</div>';
 }}
 
 // ── Patent ────────────────────────────────────────────────────────────────
 function renderPatent() {{
-  let d = [...RAW.patent];
+  var d = RAW.patent.slice();
   if (flt.q) {{
-    const q = flt.q.toLowerCase();
-    d = d.filter(r =>
-      (r['專利名稱(中文)']||'').toLowerCase().includes(q) ||
-      (r['申請案號']||'').toLowerCase().includes(q) ||
-      (r['專利編號']||'').toLowerCase().includes(q) ||
-      (r['國別']||'').toLowerCase().includes(q));
+    var q = flt.q.toLowerCase();
+    d = d.filter(function(r) {{
+      return (r['專利名稱(中文)']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['申請案號']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['專利編號']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['國別']||'').toLowerCase().indexOf(q)>=0;
+    }});
   }}
-  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
-  if (flt.ptSt!=='all') d = d.filter(r=>r._status===flt.ptSt);
-  if (flt.ptType!=='all') d = d.filter(r=>(r['專利類別']||'')=== flt.ptType);
+  if (flt.country!=='all') d = d.filter(function(r){{return r['國別']===flt.country;}});
+  if (flt.ptSt!=='all') d = d.filter(function(r){{return r._status===flt.ptSt;}});
+  if (flt.ptType!=='all') d = d.filter(function(r){{return (r['專利類別']||'')=== flt.ptType;}});
   d = applySort(d);
 
-  const total = d.length, pages = Math.ceil(total/pp)||1;
+  var total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
-  const rows = d.slice((cur-1)*pp, cur*pp);
-  const countries = [...new Set(RAW.patent.map(r=>r['國別']).filter(Boolean))].sort();
-  const ptTypes = [...new Set(RAW.patent.map(r=>r['專利類別']).filter(Boolean))].sort();
+  var rows = d.slice((cur-1)*pp, cur*pp);
+  var countries = []; RAW.patent.forEach(function(r){{ if(r['國別'] && countries.indexOf(r['國別'])<0) countries.push(r['國別']); }}); countries.sort();
+  var ptTypes = []; RAW.patent.forEach(function(r){{ if(r['專利類別'] && ptTypes.indexOf(r['專利類別'])<0) ptTypes.push(r['專利類別']); }}); ptTypes.sort();
 
-  const fbar = `<div class="fbar">
-    <input type="text" placeholder="搜尋專利名稱、申請案號、專利編號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
-    <select onchange="setF('country',this.value)">
-      <option value="all">所有國別</option>
-      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
-    </select>
-    <select onchange="setF('ptType',this.value)">
-      <option value="all">所有類別</option>
-      ${{ptTypes.map(t=>`<option value="${{esc(t)}}"${{flt.ptType===t?' selected':''}}>${{esc(t)}}</option>`).join('')}}
-    </select>
-    <select onchange="setF('ptSt',this.value)">
-      <option value="all">所有狀態</option>
-      ${{['已取得','申請中','已結案'].map(s=>`<option value="${{s}}"${{flt.ptSt===s?' selected':''}}>${{s}}</option>`).join('')}}
-    </select>
-    <span class="frs" onclick="resetF()">重設</span>
-    <span class="rcount">共 ${{total}} 筆${{total!==RAW.patent.length?' (全 '+RAW.patent.length+')':''}}</span>
-  </div>`;
+  var fbar = '<div class="fbar">'
+    + '<input type="text" placeholder="搜尋專利名稱、申請案號&#x2026;" oninput="setF(\'q\',this.value)" value="' + esc(flt.q) + '">'
+    + '<select onchange="setF(\'country\',this.value)"><option value="all">所有國別</option>'
+    + countries.map(function(c){{return '<option value="'+esc(c)+'"'+(flt.country===c?' selected':'')+'>'+esc(c)+'</option>';}}).join('') + '</select>'
+    + '<select onchange="setF(\'ptType\',this.value)"><option value="all">所有類別</option>'
+    + ptTypes.map(function(t){{return '<option value="'+esc(t)+'"'+(flt.ptType===t?' selected':'')+'>'+esc(t)+'</option>';}}).join('') + '</select>'
+    + '<select onchange="setF(\'ptSt\',this.value)"><option value="all">所有狀態</option>'
+    + ['已取得','申請中','已結案'].map(function(s){{return '<option value="'+s+'"'+(flt.ptSt===s?' selected':'')+'>'+s+'</option>';}}).join('') + '</select>'
+    + '<span class="frs" onclick="resetF()">重設</span>'
+    + '<span class="rcount">共 ' + total + ' 筆</span></div>';
 
-  const tbody = rows.length===0
-    ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-        <td><div style="font-weight:500;color:#1a1a2e">${{esc(r['專利名稱(中文)']||'—')}}</div><div class="cs">${{esc(r['專利類別']||'')}}</div></td>
-        <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
-        <td style="font-size:12px">${{esc(r['申請案號']||'—')}}</td>
-        <td style="font-size:12px">${{esc(r['專利編號']||'—')}}</td>
-        <td>${{badge(r._status,'b-'+r._status)}}</td>
-        <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'—')}}</td>
-      </tr>`).join('');
+  var tbody = rows.length===0
+    ? '<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>'
+    : rows.map(function(r) {{
+        return '<tr onclick=\'openMo(\'' + esc(JSON.stringify(r)) + '\')\'>'
+          + '<td><div style="font-weight:500;color:#1a1a2e">' + esc(r['專利名稱(中文)']||'&#x2014;') + '</div><div class="cs">' + esc(r['專利類別']||'') + '</div></td>'
+          + '<td style="font-size:12px">' + esc(r['國別']||'&#x2014;') + '</td>'
+          + '<td style="font-size:12px">' + esc(r['申請案號']||'&#x2014;') + '</td>'
+          + '<td style="font-size:12px">' + esc(r['專利編號']||'&#x2014;') + '</td>'
+          + '<td>' + badge(r._status,'b-'+r._status) + '</td>'
+          + '<td style="font-size:12px;color:#6b7a99">' + esc(r._end_date||'&#x2014;') + '</td>'
+          + '</tr>';
+      }}).join('');
 
-  return fbar + `<div class="twrap"><table>
-    <thead><tr>
-      <th onclick="sortBy('_name')">專利名稱（中文）</th>
-      <th onclick="sortBy('_country')">國別</th>
-      <th>申請案號</th>
-      <th>專利編號</th>
-      <th onclick="sortBy('_status')">目前狀態</th>
-      <th onclick="sortBy('_end_date')">證書到期日</th>
-    </tr></thead>
-    <tbody>${{tbody}}</tbody>
-  </table>${{mkPager(total,pages)}}</div>`;
+  return fbar + '<div class="twrap"><table>'
+    + '<thead><tr><th onclick="sortBy(\'_name\')">專利名稱（中文）</th><th onclick="sortBy(\'_country\')">國別</th><th>申請案號</th><th>專利編號</th><th onclick="sortBy(\'_status\')">目前狀態</th><th onclick="sortBy(\'_end_date\')">證書到期日</th></tr></thead>'
+    + '<tbody>' + tbody + '</tbody></table>' + mkPager(total,pages) + '</div>';
 }}
 
 // ── Registration ──────────────────────────────────────────────────────────
 function renderRegistration() {{
-  let d = [...RAW.registration];
+  var d = RAW.registration.slice();
   if (flt.q) {{
-    const q = flt.q.toLowerCase();
-    d = d.filter(r =>
-      (r['登記產品名']||'').toLowerCase().includes(q) ||
-      (r['國別']||'').toLowerCase().includes(q) ||
-      (r['證書/License ID']||'').toLowerCase().includes(q) ||
-      (r['登記公司']||'').toLowerCase().includes(q));
+    var q = flt.q.toLowerCase();
+    d = d.filter(function(r) {{
+      return (r['登記產品名']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['國別']||'').toLowerCase().indexOf(q)>=0 ||
+             (r['登記公司']||'').toLowerCase().indexOf(q)>=0;
+    }});
   }}
-  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
-  if (flt.rgSt!=='all') d = d.filter(r=>r._status===flt.rgSt);
-  if (flt.rgType!=='all') d = d.filter(r=>(r['登記類別']||'')=== flt.rgType);
+  if (flt.country!=='all') d = d.filter(function(r){{return r['國別']===flt.country;}});
+  if (flt.rgSt!=='all') d = d.filter(function(r){{return r._status===flt.rgSt;}});
+  if (flt.rgType!=='all') d = d.filter(function(r){{return (r['登記類別']||'')=== flt.rgType;}});
   d = applySort(d);
 
-  const total = d.length, pages = Math.ceil(total/pp)||1;
+  var total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
-  const rows = d.slice((cur-1)*pp, cur*pp);
-  const countries = [...new Set(RAW.registration.map(r=>r['國別']).filter(Boolean))].sort();
-  const rgTypes = [...new Set(RAW.registration.map(r=>r['登記類別']).filter(Boolean))].sort();
-  const statuses = [...new Set(RAW.registration.map(r=>r._status).filter(Boolean))].sort();
+  var rows = d.slice((cur-1)*pp, cur*pp);
+  var countries = []; RAW.registration.forEach(function(r){{ if(r['國別'] && countries.indexOf(r['國別'])<0) countries.push(r['國別']); }}); countries.sort();
+  var rgTypes = []; RAW.registration.forEach(function(r){{ if(r['登記類別'] && rgTypes.indexOf(r['登記類別'])<0) rgTypes.push(r['登記類別']); }}); rgTypes.sort();
+  var statuses = []; RAW.registration.forEach(function(r){{ if(r._status && statuses.indexOf(r._status)<0) statuses.push(r._status); }}); statuses.sort();
 
-  const fbar = `<div class="fbar">
-    <input type="text" placeholder="搜尋產品名稱、國別、證書號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
-    <select onchange="setF('country',this.value)">
-      <option value="all">所有國別</option>
-      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
-    </select>
-    ${{rgTypes.length?`<select onchange="setF('rgType',this.value)">
-      <option value="all">所有登記類別</option>
-      ${{rgTypes.map(t=>`<option value="${{esc(t)}}"${{flt.rgType===t?' selected':''}}>${{esc(t)}}</option>`).join('')}}
-    </select>`:''}}<select onchange="setF('rgSt',this.value)">
-      <option value="all">所有狀態</option>
-      ${{statuses.map(s=>`<option value="${{esc(s)}}"${{flt.rgSt===s?' selected':''}}>${{s}}</option>`).join('')}}
-    </select>
-    <span class="frs" onclick="resetF()">重設</span>
-    <span class="rcount">共 ${{total}} 筆${{total!==RAW.registration.length?' (全 '+RAW.registration.length+')':''}}</span>
-  </div>`;
+  var fbar = '<div class="fbar">'
+    + '<input type="text" placeholder="搜尋產品名稱、國別&#x2026;" oninput="setF(\'q\',this.value)" value="' + esc(flt.q) + '">'
+    + '<select onchange="setF(\'country\',this.value)"><option value="all">所有國別</option>'
+    + countries.map(function(c){{return '<option value="'+esc(c)+'"'+(flt.country===c?' selected':'')+'>'+esc(c)+'</option>';}}).join('') + '</select>'
+    + (rgTypes.length?'<select onchange="setF(\'rgType\',this.value)"><option value="all">所有登記類別</option>'
+    + rgTypes.map(function(t){{return '<option value="'+esc(t)+'"'+(flt.rgType===t?' selected':'')+'>'+esc(t)+'</option>';}}).join('') + '</select>':'')
+    + '<select onchange="setF(\'rgSt\',this.value)"><option value="all">所有狀態</option>'
+    + statuses.map(function(s){{return '<option value="'+s+'"'+(flt.rgSt===s?' selected':'')+'>'+s+'</option>';}}).join('') + '</select>'
+    + '<span class="frs" onclick="resetF()">重設</span>'
+    + '<span class="rcount">共 ' + total + ' 筆</span></div>';
 
-  const tbody = rows.length===0
-    ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
-    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-        <td><div class="cn">${{esc(r['登記產品名']||'—')}}</div></td>
-        <td style="font-size:12px">${{esc(r['登記類別']||'—')}}</td>
-        <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
-        <td style="font-size:12px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${{esc(r['登記公司']||'—')}}</td>
-        <td>${{badge(r._status,'b-'+r._status)}}</td>
-        <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'—')}}</td>
-      </tr>`).join('');
+  var tbody = rows.length===0
+    ? '<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>'
+    : rows.map(function(r) {{
+        return '<tr onclick=\'openMo(\'' + esc(JSON.stringify(r)) + '\')\'>'
+          + '<td><div class="cn">' + esc(r['登記產品名']||'&#x2014;') + '</div></td>'
+          + '<td style="font-size:12px">' + esc(r['登記類別']||'&#x2014;') + '</td>'
+          + '<td style="font-size:12px">' + esc(r['國別']||'&#x2014;') + '</td>'
+          + '<td style="font-size:12px">' + esc(r['登記公司']||'&#x2014;') + '</td>'
+          + '<td>' + badge(r._status,'b-'+r._status) + '</td>'
+          + '<td style="font-size:12px;color:#6b7a99">' + esc(r._end_date||'&#x2014;') + '</td>'
+          + '</tr>';
+      }}).join('');
 
-  return fbar + `<div class="twrap"><table>
-    <thead><tr>
-      <th onclick="sortBy('_name')">登記產品名</th>
-      <th onclick="sortBy('_sub')">登記類別</th>
-      <th onclick="sortBy('_country')">國別</th>
-      <th>登記公司</th>
-      <th onclick="sortBy('_status')">狀態</th>
-      <th onclick="sortBy('_end_date')">有效期限</th>
-    </tr></thead>
-    <tbody>${{tbody}}</tbody>
-  </table>${{mkPager(total,pages)}}</div>`;
+  return fbar + '<div class="twrap"><table>'
+    + '<thead><tr><th onclick="sortBy(\'_name\')">登記產品名</th><th>登記類別</th><th onclick="sortBy(\'_country\')">國別</th><th>登記公司</th><th onclick="sortBy(\'_status\')">狀態</th><th onclick="sortBy(\'_end_date\')">有效期限</th></tr></thead>'
+    + '<tbody>' + tbody + '</tbody></table>' + mkPager(total,pages) + '</div>';
 }}
 
 // ── Alerts ────────────────────────────────────────────────────────────────
 function renderAlerts() {{
-  const RANKS = ['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'];
-  const LABELS = {{'期限已過':'⚠ 期限已過','即將到期':'🟠 6個月內到期','即將到期(30天)':'🔴 30天內到期',
-    '即將到期(90天)':'🟠 90天內到期','即將到期(180天)':'🟡 180天內到期','即將到期(365天)':'🟡 365天內到期'}};
-  let html = RANKS.map(dl => {{
-    const items = ALL.filter(r=>r._dl===dl);
+  var RANKS = ['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'];
+  var LABELS = {{'期限已過':'&#x26A0; 期限已過','即將到期':'&#x1F7E0; 6個月內到期','即將到期(30天)':'&#x1F534; 30天內到期',
+    '即將到期(90天)':'&#x1F7E0; 90天內到期','即將到期(180天)':'&#x1F7E1; 180天內到期','即將到期(365天)':'&#x1F7E1; 365天內到期'}};
+  var html = RANKS.map(function(dl) {{
+    var items = ALL.filter(function(r){{return r._dl===dl;}});
     if (!items.length) return '';
-    return `<div style="margin-bottom:20px"><div class="section-title">${{LABELS[dl]}} (${{items.length}})</div>
-      <div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限日期</div><div>提醒</div></div>
-      ${{items.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
-        <div><div class="cn">${{esc(r._name)}}</div></div>
-        <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
-        <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
-        <div>${{dlBadge(r._dl)}}</div>
-      </div>`).join('')}}
-      </div></div>`;
+    return '<div style="margin-bottom:20px"><div class="section-title">' + LABELS[dl] + ' (' + items.length + ')</div>'
+      + '<div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型&#x30FB;國別</div><div>期限日期</div><div>提醒</div></div>'
+      + items.map(function(r) {{
+          return '<div class="pr" onclick=\'openMo(\'' + esc(JSON.stringify(r)) + '\')\''
+            + '><div><div class="cn">' + esc(r._name) + '</div></div>'
+            + '<div style="font-size:12px">' + esc(r._type) + '</div>'
+            + '<div style="font-size:12px;color:#6b7a99">' + esc(r._deadline||'&#x2014;') + '</div>'
+            + '<div>' + dlBadge(r._dl) + '</div></div>';
+        }}).join('')
+      + '</div></div>';
   }}).join('');
-  return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 ✓</div>';
+  return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 &#x2713;</div>';
 }}
 
 // ── Modal ─────────────────────────────────────────────────────────────────
 function openMo(s) {{
-  let r; try {{ r = JSON.parse(s); }} catch {{ return; }}
-  const raw = r._raw || r;
-  const type = r._type || '';
+  var r; try {{ r = JSON.parse(s); }} catch(e) {{ return; }}
+  var raw = r._raw || r;
+  var type = r._type || '';
   document.getElementById('mt').textContent = type + ' 案件明細';
-  const SKIP = new Set(['_status','_end_date','_deadline_status','_start_date','_type','_name','_country','_deadline','_dl','_appNo','_sub','_raw','_cert']);
-  const FULL_COLS = new Set(['專利名稱(中文)','專利名稱(英文)','Raw Materials','備註','說明','目前狀態']);
+  var SKIP = new Set(['_status','_end_date','_deadline_status','_start_date','_type','_name','_country','_deadline','_dl','_appNo','_sub','_raw','_cert']);
+  var FULL_COLS = new Set(['專利名稱(中文)','專利名稱(英文)','Raw Materials','備註','說明','目前狀態']);
 
-  let topHtml = `<div class="dg" style="margin-bottom:14px">`;
+  var topHtml = '<div class="dg" style="margin-bottom:14px">';
   if (type==='商標') {{
-    topHtml += `<div class="di"><label>類型</label><div class="dv">${{badge(type,'b-T')}}</div></div>
-    <div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>
-    <div class="di"><label>使用起始日</label><div class="dv">${{esc(raw._start_date||'—')}}</div></div>
-    <div class="di"><label>使用到期日</label><div class="dv">${{esc(raw._end_date||'—')}} ${{dlBadge(raw._deadline_status)}}</div></div>`;
+    topHtml += '<div class="di"><label>類型</label><div class="dv">' + badge(type,'b-T') + '</div></div>'
+      + '<div class="di"><label>狀態</label><div class="dv">' + badge(r._status||'&#x2014;','b-'+(r._status||'')) + '</div></div>'
+      + '<div class="di"><label>使用起始日</label><div class="dv">' + esc(raw._start_date||'&#x2014;') + '</div></div>'
+      + '<div class="di"><label>使用到期日</label><div class="dv">' + esc(raw._end_date||'&#x2014;') + ' ' + dlBadge(raw._deadline_status) + '</div></div>';
   }} else {{
-    topHtml += `<div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>`;
+    topHtml += '<div class="di"><label>狀態</label><div class="dv">' + badge(r._status||'&#x2014;','b-'+(r._status||'')) + '</div></div>';
   }}
   topHtml += '</div><hr style="border:none;border-top:1px solid #f0f4fa;margin:4px 0 12px"><div class="dg">';
 
-  const hideSet = type==='產品登記' ? REG_HIDE : new Set();
-  const items = Object.entries(raw).filter(([k]) => !SKIP.has(k) && !hideSet.has(k.toLowerCase()))
-    .map(([k,v]) => `<div class="di${{FULL_COLS.has(k)?' full':''}}"><label>${{esc(k)}}</label><div class="dv">${{esc(v||'—')}}</div></div>`)
-    .join('');
+  var hideSet = type==='產品登記' ? REG_HIDE : new Set();
+  var items = Object.entries(raw)
+    .filter(function(kv) {{ return !SKIP.has(kv[0]) && !hideSet.has(kv[0].toLowerCase()); }})
+    .map(function(kv) {{
+      return '<div class="di' + (FULL_COLS.has(kv[0])?' full':'') + '"><label>' + esc(kv[0]) + '</label><div class="dv">' + esc(kv[1]||'&#x2014;') + '</div></div>';
+    }}).join('');
   document.getElementById('mb').innerHTML = topHtml + items + '</div>';
   document.getElementById('mo').classList.add('open');
 }}
@@ -771,93 +743,92 @@ function closeMo(e) {{ if (!e||e.target===document.getElementById('mo')) documen
 
 // ── Export ────────────────────────────────────────────────────────────────
 function openExpMo() {{
-  // Build column checkboxes from registration data
-  const allKeys = new Set();
-  RAW.registration.forEach(r => Object.keys(r).forEach(k => {{ if (!k.startsWith('_') && !REG_HIDE.has(k.toLowerCase())) allKeys.add(k); }}));
-  const suggested = ['登記產品名','登記類別','國別','登記公司','證書/License ID','取得日期','進度','證書有效期限'];
-  const ordered = [...suggested.filter(k=>allKeys.has(k)), ...[...allKeys].filter(k=>!suggested.includes(k))];
-  const defaultOn = new Set(['登記產品名','登記類別','國別','登記公司','狀態','進度','證書有效期限']);
-
-  document.getElementById('expColList').innerHTML = ordered.map(k =>
-    `<label class="chk-item"><input type="checkbox" id="exp_${{k}}" ${{defaultOn.has(k)?'checked':''}}> ${{esc(k)}}</label>`
-  ).join('');
+  var allKeys = new Set();
+  RAW.registration.forEach(function(r) {{ Object.keys(r).forEach(function(k) {{ if (!k.startsWith('_') && !REG_HIDE.has(k.toLowerCase())) allKeys.add(k); }}); }});
+  var suggested = ['登記產品名','登記類別','國別','登記公司','證書/License ID','取得日期','進度','證書有效期限'];
+  var ordered = suggested.filter(function(k){{return allKeys.has(k);}}).concat([...allKeys].filter(function(k){{return suggested.indexOf(k)<0;}}));
+  var defaultOn = new Set(['登記產品名','登記類別','國別','登記公司','狀態','進度','證書有效期限']);
+  document.getElementById('expColList').innerHTML = ordered.map(function(k) {{
+    return '<label class="chk-item"><input type="checkbox" id="exp_' + k + '" ' + (defaultOn.has(k)?'checked':'') + '> ' + esc(k) + '</label>';
+  }}).join('');
   document.getElementById('mode2Preview').innerHTML = '';
   document.getElementById('expMo').classList.add('open');
 }}
 function closeExpMo(e) {{ if (!e||e.target===document.getElementById('expMo')) document.getElementById('expMo').classList.remove('open'); }}
 
 function doMode1Export() {{
-  const cols = [...document.querySelectorAll('#expColList input:checked')].map(el => el.id.replace('exp_',''));
+  var cols = [].slice.call(document.querySelectorAll('#expColList input:checked')).map(function(el){{return el.id.replace('exp_','');}});
   if (!cols.length) {{ alert('請至少勾選一個欄位'); return; }}
-  const csv = '﻿' + [cols.join(','),
-    ...RAW.registration.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
-  ].join('\n');
+  var csv = '﻿' + [cols.join(',')].concat(RAW.registration.map(function(r){{
+    return cols.map(function(c){{return '"'+(r[c]||'').replace(/"/g,'""')+'"';}}).join(',');
+  }})).join('\n');
   dlCSV(csv, '正瀚_產品登記_{TODAY_STR}'.replace(/\//g,'') + '.csv');
 }}
 
-function doMode2Preview() {{
-  const tbl = buildMode2Table();
-  document.getElementById('mode2Preview').innerHTML = renderMode2HTML(tbl);
-}}
+function doMode2Preview() {{ document.getElementById('mode2Preview').innerHTML = renderMode2HTML(buildMode2Table()); }}
 
 function doMode2Export() {{
-  const tbl = buildMode2Table();
-  const {{countries, types, data}} = tbl;
-  const header = ['國別/登記類別', ...types, '合計'];
-  const rows = countries.map(c => {{
-    const row = [c];
-    let tot = 0;
-    types.forEach(t => {{
-      const cell = (data[c]&&data[c][t]) || {{self:0, help:0}};
-      row.push(`自行${{cell.self}}/協助${{cell.help}}`);
+  var tbl = buildMode2Table();
+  var countries = tbl.countries, types = tbl.types, data = tbl.data;
+  var header = ['國別/登記類別'].concat(types).concat(['合計']);
+  var rows = countries.map(function(c) {{
+    var row = [c]; var tot = 0;
+    types.forEach(function(t) {{
+      var cell = (data[c]&&data[c][t]) || {{self:0, help:0}};
+      row.push('自行'+cell.self+'/協助'+cell.help);
       tot += cell.self + cell.help;
     }});
-    row.push(tot);
-    return row;
+    row.push(tot); return row;
   }});
-  const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
+  var csv = '﻿' + [header.join(',')].concat(rows.map(function(r){{return r.map(function(v){{return '"'+String(v).replace(/"/g,'""')+'"';}}).join(',');}})).join('\n');
   dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'') + '.csv');
 }}
 
 function buildMode2Table() {{
-  const CH = 'CH Biotech R&D Co., Ltd';
-  const countries = [...new Set(RAW.registration.map(r=>r['國別']).filter(Boolean))].sort();
-  const types = [...new Set(RAW.registration.map(r=>r['登記類別']).filter(Boolean))].sort();
-  const data = {{}};
-  RAW.registration.forEach(r => {{
-    const c = r['國別']||'', t = r['登記類別']||'', co = r['登記公司']||'';
+  var CH = 'CH Biotech R&D Co., Ltd';
+  var countries = []; RAW.registration.forEach(function(r){{ if(r['國別'] && countries.indexOf(r['國別'])<0) countries.push(r['國別']); }}); countries.sort();
+  var types = []; RAW.registration.forEach(function(r){{ if(r['登記類別'] && types.indexOf(r['登記類別'])<0) types.push(r['登記類別']); }}); types.sort();
+  var data = {{}};
+  RAW.registration.forEach(function(r) {{
+    var c = r['國別']||'', t = r['登記類別']||'', co = r['登記公司']||'';
     if (!c||!t) return;
     if (!data[c]) data[c] = {{}};
     if (!data[c][t]) data[c][t] = {{self:0, help:0}};
     if (co === CH) data[c][t].self++; else data[c][t].help++;
   }});
-  return {{countries, types, data}};
+  return {{countries:countries, types:types, data:data}};
 }}
 
-function renderMode2HTML({{countries, types, data}}) {{
-  const hdr = `<tr><th class="rc">國別 ＼ 登記類別</th>${{types.map(t=>`<th>${{esc(t)}}</th>`).join('')}}<th>合計</th></tr>`;
-  const rows = countries.map(c => {{
-    let tot = 0;
-    const cells = types.map(t => {{
-      const cell = (data[c]&&data[c][t])||{{self:0,help:0}};
+function renderMode2HTML(tbl) {{
+  var countries = tbl.countries, types = tbl.types, data = tbl.data;
+  var hdr = '<tr><th class="rc">國別 &#x5C39; 登記類別</th>' + types.map(function(t){{return '<th>'+esc(t)+'</th>';}}).join('') + '<th>合計</th></tr>';
+  var rows = countries.map(function(c) {{
+    var tot = 0;
+    var cells = types.map(function(t) {{
+      var cell = (data[c]&&data[c][t])||{{self:0,help:0}};
       tot += cell.self+cell.help;
-      if (!cell.self && !cell.help) return '<td>—</td>';
-      return `<td>自行 ${{cell.self}}<br>協助 ${{cell.help}}</td>`;
+      if (!cell.self && !cell.help) return '<td>&#x2014;</td>';
+      return '<td>自行 ' + cell.self + '<br>協助 ' + cell.help + '</td>';
     }}).join('');
-    return `<tr><td class="rc">${{esc(c)}}</td>${{cells}}<td><strong>${{tot}}</strong></td></tr>`;
+    return '<tr><td class="rc">' + esc(c) + '</td>' + cells + '<td><strong>' + tot + '</strong></td></tr>';
   }}).join('');
-  return `<table class="mode2-tbl"><thead>${{hdr}}</thead><tbody>${{rows}}</tbody></table>
-    <div style="font-size:11px;color:#8899bb;margin-top:6px">自行 = CH Biotech R&amp;D Co., Ltd；協助 = 非 CH Biotech（協助客戶取得）</div>`;
+  return '<table class="mode2-tbl"><thead>' + hdr + '</thead><tbody>' + rows + '</tbody></table>'
+    + '<div style="font-size:11px;color:#8899bb;margin-top:6px">自行 = CH Biotech R&amp;D Co., Ltd；協助 = 非 CH Biotech（協助客戶取得）</div>';
 }}
 
 function dlCSV(csv, name) {{
-  const a = document.createElement('a');
+  var a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {{type:'text/csv;charset=utf-8'}}));
   a.download = name; a.click();
 }}
 
 // ── Init ──────────────────────────────────────────────────────────────────
-render();
+try {{
+  render();
+}} catch(e) {{
+  var el = document.getElementById('content');
+  if (el) el.innerHTML = '<div style="padding:40px;color:#c00;font-family:monospace;white-space:pre-wrap"><b>&#x26A0; 頁面載入錯誤（請截圖回報）</b><br><br>' + String(e.message).replace(/</g,'&lt;') + '<br><br>' + String(e.stack||'').replace(/</g,'&lt;') + '</div>';
+}}
 </script>
 </body>
 </html>'''
@@ -908,4 +879,4 @@ html = build_html(trademark, patent, registration)
 out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'index.html')
 with open(out, 'w', encoding='utf-8') as f:
     f.write(html)
-print(f'Done: {len(html):,} bytes → {out}')
+print(f'Done: {len(html):,} bytes -> {out}')

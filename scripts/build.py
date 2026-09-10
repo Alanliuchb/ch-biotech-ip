@@ -514,8 +514,6 @@ function renderOv() {{
     <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">註冊案 ${{tmReg}} ／ 其他 ${{tm.length-tmReg}}</div></div>
     <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
     <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
-    <div class="card${{tmOver>0?' ac':''}}"><div class="card-label">${{tmOver>0?'⚠ ':''}}商標期限已過</div><div class="card-value">${{tmOver}}</div><div class="card-sub">需確認是否延展</div></div>
-    <div class="card${{(tmSoon+rgSoon)>0?' wc':''}}"><div class="card-label">${{(tmSoon+rgSoon)>0?'⏰ ':''}}近期到期提醒</div><div class="card-value">${{alertN}}</div><div class="card-sub">商標 ${{tmSoon}} ・ 登記 ${{rgSoon}}</div></div>
   </div>
   <div class="section-title">優先關注事項</div>
   ${{priRows}}`;
@@ -736,12 +734,6 @@ function renderAlerts() {{
       </div>`).join('')}}
       </div></div>`;
   }}).join('');
-  const na = ALL.filter(r=>r._dl==='N/A');
-  if (na.length) html += `<div style="margin-bottom:20px"><div class="section-title">無到期日 (N/A) (${{na.length}})</div>
-    <div class="ibox">共 ${{na.length}} 件案件登記無期限（N/A），無需展延。</div></div>`;
-  const missing = ALL.filter(r=>r._dl==='待補期限');
-  if (missing.length) html += `<div style="margin-bottom:20px"><div class="section-title">待補期限 (${{missing.length}})</div>
-    <div class="ibox">共 ${{missing.length}} 件案件尚無到期日記錄。</div></div>`;
   return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 ✓</div>';
 }}
 
@@ -796,7 +788,7 @@ function doMode1Export() {{
   if (!cols.length) {{ alert('請至少勾選一個欄位'); return; }}
   const csv = '﻿' + [cols.join(','),
     ...RAW.registration.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
-  ].join('\\n');
+  ].join('\n');
   dlCSV(csv, '正瀚_產品登記_{TODAY_STR}'.replace(/\//g,'') + '.csv');
 }}
 
@@ -820,7 +812,7 @@ function doMode2Export() {{
     row.push(tot);
     return row;
   }});
-  const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
+  const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
   dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'') + '.csv');
 }}
 
@@ -876,7 +868,32 @@ pt_data  = download_excel('專利', URLS['patent'])
 rg_data  = download_excel('登記', URLS['registration'])
 
 print('Processing...')
-trademark    = process_trademark(read_excel_rows(tm_data, header_row=0))
+def _read_tm(data):
+    """商標 Excel 自動偵測標題列（可能在 row 0 或 row 1）"""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    TM_KEYS = {'商標', '商標案件', '商標名稱', '國別', '申請號', '申請案號',
+               '進度狀況', '進度狀態', '商標分類', '使用期間-到期', '使用期間-到期日'}
+    for hr in range(min(3, len(all_rows))):
+        row_strs = {str(v).strip() for v in all_rows[hr] if v is not None}
+        if len(row_strs & TM_KEYS) >= 2:
+            headers = [str(h).strip() if h is not None else '' for h in all_rows[hr]]
+            records = []
+            for row in all_rows[hr + 1:]:
+                if all(v is None for v in row):
+                    continue
+                rec = {}
+                for h, v in zip(headers, row):
+                    if h:
+                        rec[h] = str(v).strip() if v is not None else ''
+                records.append(rec)
+            print(f'  商標標題列: row {hr}, 欄位: {[h for h in headers if h]}')
+            return records
+    return read_excel_rows(data, header_row=1)
+
+trademark    = process_trademark(_read_tm(tm_data))
 patent       = process_patent(read_excel_rows(pt_data))
 registration = process_registration(read_excel_rows(rg_data))
 print(f'  商標:{len(trademark)} 專利:{len(patent)} 登記:{len(registration)}')

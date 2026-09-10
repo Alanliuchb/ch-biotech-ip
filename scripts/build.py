@@ -27,17 +27,21 @@ NOW_STR = _NOW_TW.strftime('%Y/%m/%d %H:%M')
 
 def download_excel(name, url):
     ctx = ssl.create_default_context()
-    # Google Sheets 每次執行都重新下載，避免 GitHub Actions 或中間快取沿用舊檔。
-    sep = '&' if '?' in url else '?'
-    fresh_url = f'{url}{sep}cache_bust={int(_NOW_TW.timestamp())}'
-    req = urllib.request.Request(fresh_url, headers={
+    # 每次 Actions 執行都重新向 Google Sheets 匯出 XLSX；不附加未知 query，
+    # 避免 Google Drive 對上傳的 Excel 檔案回傳 400。
+    req = urllib.request.Request(url, headers={
         'User-Agent': 'Mozilla/5.0 (GitHub-Actions; latest-sheet-fetch)',
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
+        'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',
     })
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
             data = r.read()
+            content_type = (r.headers.get('Content-Type') or '').lower()
+        if not data.startswith(b'PK\x03\x04'):
+            preview = data[:200].decode('utf-8', errors='replace').replace('\n', ' ')
+            raise RuntimeError(f'{name} 下載結果不是 XLSX（Content-Type: {content_type}；回應開頭: {preview}）')
         print(f'  OK {name}: {len(data):,} bytes')
         return data
     except Exception as e:

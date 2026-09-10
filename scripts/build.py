@@ -3,7 +3,7 @@
 import json, datetime, urllib.request, ssl, io, sys, os
 
 URLS = {
-    'trademark':    'https://docs.google.com/spreadsheets/d/1MfsBuMHVZDFd_MV1v0LTnUOsYqUGkhVn/export?format=xlsx',
+    'trademark':    'https://docs.google.com/spreadsheets/d/13iX5d_tig149MicN-WvTENS_kTiQjkNb/export?format=xlsx',
     'patent':       'https://docs.google.com/spreadsheets/d/1Uj_PV344NkDiY2n8YCs_HyjpnQYn87Ca/export?format=xlsx',
     'registration': 'https://docs.google.com/spreadsheets/d/1llnfbjcPST6Wa0p6psIxUfnjlGicZEi9/export?format=xlsx',
 }

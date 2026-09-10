@@ -13,12 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install openpyxl
-      - run: python scripts/build.py
-      - run: |
+
+      - name: 安裝套件
+        run: pip install openpyxl google-auth
+
+      - name: 從私人 Google Sheets 讀取並產生網頁
+        run: python scripts/build.py
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: 提交更新後的網頁
+        run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add index.html

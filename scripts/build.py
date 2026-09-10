@@ -5,6 +5,9 @@
 """
 import json, datetime, urllib.request, ssl, io, sys, os
 
+GOOGLE_SERVICE_ACCOUNT_ENV = 'GOOGLE_SERVICE_ACCOUNT_JSON'
+_GOOGLE_CREDENTIALS = None
+
 URLS = {
     'trademark':    'https://docs.google.com/spreadsheets/d/13iX5d_tig149MicN-WvTENS_kTiQjkNb/export?format=xlsx',
     'patent':       'https://docs.google.com/spreadsheets/d/1Uj_PV344NkDiY2n8YCs_HyjpnQYn87Ca/export?format=xlsx',
@@ -26,11 +29,32 @@ NOW_STR = _NOW_TW.strftime('%Y/%m/%d %H:%M')
 
 
 def download_excel(name, url):
+    global _GOOGLE_CREDENTIALS
     ctx = ssl.create_default_context()
-    # 每次 Actions 執行都重新向 Google Sheets 匯出 XLSX；不附加未知 query，
-    # 避免 Google Drive 對上傳的 Excel 檔案回傳 400。
+    service_account_json = os.environ.get(GOOGLE_SERVICE_ACCOUNT_ENV, '').strip()
+    if not service_account_json:
+        raise RuntimeError(
+            f'找不到 GitHub Secret：{GOOGLE_SERVICE_ACCOUNT_ENV}。'
+            '請確認已在 GitHub Repository 的 Actions Secrets 建立。'
+        )
+    try:
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        from google.oauth2.service_account import Credentials
+        if _GOOGLE_CREDENTIALS is None:
+            info = json.loads(service_account_json)
+            _GOOGLE_CREDENTIALS = Credentials.from_service_account_info(
+                info,
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
+        if not _GOOGLE_CREDENTIALS.valid:
+            _GOOGLE_CREDENTIALS.refresh(GoogleAuthRequest())
+    except Exception as e:
+        raise RuntimeError(f'Google Service Account 驗證失敗：{e}') from e
+
+    # 使用 OAuth Bearer Token 讀取私人 Google Sheets，不依賴公開分享連結。
     req = urllib.request.Request(url, headers={
-        'User-Agent': 'Mozilla/5.0 (GitHub-Actions; latest-sheet-fetch)',
+        'User-Agent': 'CH-Biotech-IP-Updater/4.0',
+        'Authorization': f'Bearer {_GOOGLE_CREDENTIALS.token}',
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
         'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',

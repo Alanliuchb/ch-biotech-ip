@@ -348,6 +348,15 @@ td{padding:9px 13px;vertical-align:middle}
 .di label{font-size:11px;color:#8899bb;font-weight:600;display:block;margin-bottom:2px}
 .di .dv{font-size:13px;color:#1a1a2e}
 .di.full{grid-column:1/-1}
+.lock-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f3f6fb;padding:20px}
+.lock-card{width:min(390px,100%);background:#fff;border:1px solid #e5eaf2;border-radius:14px;padding:30px;box-shadow:0 8px 30px rgba(24,43,77,.10);text-align:center}
+.lock-logo{font-size:28px;font-weight:800;letter-spacing:2px;color:#17213a;margin-bottom:4px}
+.lock-sub{font-size:13px;color:#6b7a99;margin-bottom:24px}
+.lock-card input{width:100%;box-sizing:border-box;border:1px solid #cfd8e8;border-radius:8px;padding:11px 12px;font-size:14px;outline:none;margin-bottom:10px}
+.lock-card input:focus{border-color:#4263eb;box-shadow:0 0 0 3px rgba(66,99,235,.12)}
+.lock-card button{width:100%;border:0;border-radius:8px;padding:11px;background:#315bdc;color:#fff;font-size:14px;cursor:pointer}
+.lock-error{height:18px;color:#d9485f;font-size:12px;margin-top:10px}
+body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
 .sc{background:#fff;border-radius:10px;border:1px solid #e8edf5;padding:20px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .sc h3{font-size:14px;font-weight:600;margin-bottom:10px}
 .ibox{background:#eff3ff;border:1px solid #c5d2f6;border-radius:8px;padding:12px 14px;font-size:13px;color:#3b5bdb;line-height:1.5}
@@ -380,7 +389,18 @@ td{padding:9px 13px;vertical-align:middle}
 <title>正瀚生技｜智財與登記管理</title>
 <style>{css}</style>
 </head>
-<body>
+<body class="locked">
+<div id="app-lock" class="lock-screen">
+  <div class="lock-card">
+    <div class="lock-logo">CH BIOTECH</div>
+    <div class="lock-sub">智財與登記管理系統</div>
+    <form onsubmit="unlockApp(event)">
+      <input id="app-password" type="password" autocomplete="current-password" placeholder="請輸入密碼" autofocus>
+      <button type="submit">進入系統</button>
+      <div id="lock-error" class="lock-error"></div>
+    </form>
+  </div>
+</div>
 <aside id="sidebar">
   <div class="brand">
     <div class="brand-logo">CH</div>
@@ -440,6 +460,27 @@ td{padding:9px 13px;vertical-align:middle}
 
 <script type="application/json" id="raw-data">{data_js}</script>
 <script>
+const PASS_HASH = 'c5e8aa9dba7646c26a2241b8fd9d257834b96c6aed1722fdf40cbdd18072195c';
+async function unlockApp(e) {{
+  e.preventDefault();
+  const input = document.getElementById('app-password');
+  const msg = document.getElementById('lock-error');
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.value));
+  const hash = Array.from(new Uint8Array(bytes)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  if (hash === PASS_HASH) {{
+    sessionStorage.setItem('chb_ip_access', PASS_HASH);
+    document.body.classList.remove('locked');
+    document.getElementById('app-lock').remove();
+  }} else {{
+    msg.textContent = '密碼錯誤，請重新輸入';
+    input.value = '';
+    input.focus();
+  }}
+}}
+if (sessionStorage.getItem('chb_ip_access') === PASS_HASH) {{
+  document.body.classList.remove('locked');
+  document.getElementById('app-lock').remove();
+}}
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
 const REG_HIDE = new Set({reg_hide_js});
 const NOW_STR = '{NOW_STR}';
@@ -822,8 +863,9 @@ function openMo(s) {{
 
   let topHtml = `<div class="dg" style="margin-bottom:14px">`;
   if (type==='商標') {{
+    const tmDisplayStatus = raw['狀態/進度說明'] || raw['進度狀況'] || raw['進度狀態'] || r._status || '—';
     topHtml += `<div class="di"><label>類型</label><div class="dv">${{badge(type,'b-T')}}</div></div>
-    <div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>
+    <div class="di"><label>狀態</label><div class="dv">${{badge(tmDisplayStatus,'b-'+(r._status||''))}}</div></div>
     <div class="di"><label>使用起始日</label><div class="dv">${{esc(raw._start_date||'—')}}</div></div>
     <div class="di"><label>使用到期日</label><div class="dv">${{esc(raw._end_date||'—')}} ${{dlBadge(raw._deadline_status)}}</div></div>`;
   }} else {{

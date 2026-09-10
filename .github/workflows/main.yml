@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: 安裝套件
-        run: pip install openpyxl google-auth
+        run: pip install openpyxl google-auth requests
 
       - name: 從私人 Google Sheets 讀取並產生網頁
         run: python scripts/build.py

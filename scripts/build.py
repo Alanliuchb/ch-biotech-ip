@@ -99,7 +99,11 @@ def read_trademark_rows(data):
         record = {}
         for header, value in zip(headers, row):
             if header:
-                record[header] = str(value).strip() if value is not None else ''
+                if isinstance(value, (datetime.datetime, datetime.date)):
+                    record[header] = value.strftime('%Y-%m-%d')
+                else:
+                    text = str(value).strip() if value is not None else ''
+                    record[header] = '' if text.startswith('#') else text
         if any(record.values()):
             records.append(record)
 
@@ -151,10 +155,10 @@ def calc_deadline(date_str):
 def trademark_status(r):
     """4 分類：註冊案 / 申請案 / 核駁案 / 放棄案"""
     st = (r.get('進度狀況') or r.get('進度狀態') or '').strip()
-    if st in ('註冊案', '申請案', '核駁案', '放棄案'):
-        return st
-    if st == '已取得':
+    if st in ('已取證', '已取得', '註冊案'):
         return '註冊案'
+    if st in ('申請案', '核駁案', '放棄案'):
+        return st
     cert = (r.get('證書號 (進度)') or r.get('證書號(進度)') or r.get('註冊號') or '').strip()
     if not cert:
         return '申請案'
@@ -286,6 +290,7 @@ td{padding:9px 13px;vertical-align:middle}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11.5px;font-weight:500;white-space:nowrap}
 .b-註冊案{background:#dcfce7;color:#166534}
 .b-申請案{background:#dbeafe;color:#1d4ed8}
+.b-審查中{background:#dbeafe;color:#1d4ed8}
 .b-核駁案{background:#fff7ed;color:#c2410c}
 .b-放棄案{background:#f3f4f6;color:#6b7280}
 .b-已取得{background:#dcfce7;color:#166534}
@@ -394,21 +399,23 @@ td{padding:9px 13px;vertical-align:middle}
   </div>
 </div>
 
-<!-- 產品登記匯出 Modal -->
+<!-- 匯出 Modal -->
 <div class="mo" id="expMo" onclick="closeExpMo(event)">
   <div class="modal" style="max-width:740px">
-    <div class="mh"><h3>匯出產品登記資料</h3><button class="mclose" onclick="closeExpMo()">✕</button></div>
+    <div class="mh"><h3 id="expTitle">匯出資料</h3><button class="mclose" onclick="closeExpMo()">✕</button></div>
     <div class="mbody">
       <div class="exp-section">
         <h4>模式 1：自選欄位匯出</h4>
         <div class="chk-grid" id="expColList"></div>
-        <button class="btn-primary" style="margin-top:8px" onclick="doMode1Export()">↓ 匯出所選欄位 CSV</button>
+        <button class="btn-primary" style="margin-top:8px" onclick="doMode1Export('csv')">↓ 匯出 CSV</button>
+        <button class="btn-outline" style="margin-top:8px;margin-left:6px" onclick="doMode1Export('pdf')">匯出 PDF</button>
       </div>
       <hr style="border:none;border-top:1px solid #e8edf5;margin:16px 0">
-      <div class="exp-section">
+      <div class="exp-section" id="mode2Section">
         <h4>模式 2：各國登記類別彙總表（自行取得 vs 協助客戶）</h4>
         <button class="btn-outline" onclick="doMode2Preview()">預覽彙總表</button>
-        <button class="btn-primary" style="margin-left:8px" onclick="doMode2Export()">↓ 匯出彙總表 CSV</button>
+        <button class="btn-primary" style="margin-left:8px" onclick="doMode2Export('csv')">↓ 匯出 CSV</button>
+        <button class="btn-outline" style="margin-left:6px" onclick="doMode2Export('pdf')">匯出 PDF</button>
         <div id="mode2Preview" style="margin-top:14px;overflow-x:auto"></div>
       </div>
     </div>
@@ -471,11 +478,11 @@ function render() {{
   const actions = document.getElementById('topbar-actions');
   actions.innerHTML = '';
   if (pg === 'overview')      el.innerHTML = renderOv();
-  else if (pg === 'trademark')  el.innerHTML = renderTrademark();
+  else if (pg === 'trademark')  {{ el.innerHTML = renderTrademark(); actions.innerHTML = '<button class="btn-outline" onclick="openExpMo(\'trademark\')">↓ 匯出</button>'; }}
   else if (pg === 'patent')     el.innerHTML = renderPatent();
   else if (pg === 'registration') {{
     el.innerHTML = renderRegistration();
-    actions.innerHTML = '<button class="btn-outline" onclick="openExpMo()">↓ 匯出</button>';
+    actions.innerHTML = '<button class="btn-outline" onclick="openExpMo(\'registration\')">↓ 匯出</button>';
   }}
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `{sync_section}`;
@@ -548,9 +555,8 @@ function renderOv() {{
   const rgSoon = rg.filter(r=>ALERT_DL.has(r._deadline_status)).length;
   const alertN = ALL.filter(r=>ALERT_DL.has(r._dl)).length;
   const pri = ALL.filter(r=>ALERT_DL.has(r._dl))
-    .sort((a,b)=>(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(a._dl)||9)
-                -(['期限已過','即將到期','即將到期(30天)','即將到期(90天)'].indexOf(b._dl)||9))
-    .slice(0,8);
+    .sort((a,b)=>(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'].indexOf(a._dl)||9)
+                -(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'].indexOf(b._dl)||9));
 
   const priRows = pri.length===0
     ? '<div class="plist"><div class="empty">目前無需立即關注的案件 ✓</div></div>'
@@ -566,8 +572,6 @@ function renderOv() {{
     <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">註冊案 ${{tmReg}} ／ 其他 ${{tm.length-tmReg}}</div></div>
     <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
     <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
-    <div class="card${{tmOver>0?' ac':''}}"><div class="card-label">${{tmOver>0?'⚠ ':''}}商標期限已過</div><div class="card-value">${{tmOver}}</div><div class="card-sub">需確認是否延展</div></div>
-    <div class="card${{(tmSoon+rgSoon)>0?' wc':''}}"><div class="card-label">${{(tmSoon+rgSoon)>0?'⏰ ':''}}近期到期提醒</div><div class="card-value">${{alertN}}</div><div class="card-sub">商標 ${{tmSoon}} ・ 登記 ${{rgSoon}}</div></div>
   </div>
   <div class="section-title">優先關注事項</div>
   ${{priRows}}`;
@@ -584,13 +588,14 @@ function renderTrademark() {{
       (r['國別']||'').toLowerCase().includes(q));
   }}
   if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
-  if (flt.tmSt!=='all') d = d.filter(r=>r._status===flt.tmSt);
+  if (flt.tmSt!=='all') d = d.filter(r=>(r['狀態/進度說明']||r._status)===flt.tmSt);
   d = applySort(d);
 
   const total = d.length, pages = Math.ceil(total/pp)||1;
   if (cur>pages) cur=pages;
   const rows = d.slice((cur-1)*pp, cur*pp);
   const countries = [...new Set(RAW.trademark.map(r=>r['國別']).filter(Boolean))].sort();
+  const tmStatuses = [...new Set(RAW.trademark.map(r=>r['狀態/進度說明']||r._status).filter(Boolean))].sort();
 
   const syncBar = `<div class="sync-bar">⇄ 同步時間：${{NOW_STR}}　·　來源：${{SHEET_NAMES.trademark}}</div>`;
   const fbar = `<div class="fbar">
@@ -601,7 +606,7 @@ function renderTrademark() {{
     </select>
     <select onchange="setF('tmSt',this.value)">
       <option value="all">所有進度</option>
-      ${{['註冊案','申請案','核駁案','放棄案'].map(s=>`<option value="${{s}}"${{flt.tmSt===s?' selected':''}}>${{s}}</option>`).join('')}}
+      ${{tmStatuses.map(s=>`<option value="${{s}}"${{flt.tmSt===s?' selected':''}}>${{s}}</option>`).join('')}}
     </select>
     <span class="frs" onclick="resetF()">重設</span>
     <span class="rcount">共 ${{total}} 筆${{total!==RAW.trademark.length?' (全 '+RAW.trademark.length+')':''}}</span>
@@ -611,17 +616,17 @@ function renderTrademark() {{
     ? `<tr><td colspan="7"><div class="empty">無符合條件的案件</div></td></tr>`
     : rows.map(r => {{
         const name = r['商標']||r['商標案件']||r['商標名稱']||'—';
-        const imgUrl = r['商標圖示']||r['圖片URL']||r['圖片']||'';
-        const imgTag = imgUrl ? `<img src="${{esc(imgUrl)}}" style="width:28px;height:28px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:4px">` : '';
+        const imgUrl = r['商標圖案']||r['商標圖示']||r['圖片URL']||r['圖片']||'';
+        const imgTag = imgUrl && !String(imgUrl).startsWith('#') ? `<img src="${{esc(imgUrl)}}" onerror="this.style.display='none'" style="width:28px;height:28px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:4px">` : '';
         const appNo = r['申請號']||r['申請案號']||'—';
-        const regNo = r['證書號 (進度)']||r['證書號(進度)']||r['註冊號']||'—';
+        const regNo = r['註冊編號']||r['註冊號']||r['證書號 (進度)']||r['證書號(進度)']||'—';
         const cls = r['申請類別']||r['類別']||'';
         const brand = r['商標分類']||'';
         return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
           <td><div style="display:flex;align-items:center">${{imgTag}}<div><div class="cn">${{esc(name)}}</div><div class="cs">${{esc(brand)}}</div></div></div></td>
           <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
           <td style="font-size:12px">${{esc(cls)}}</td>
-          <td>${{badge(r._status,'b-'+r._status)}}</td>
+          <td>${{badge(r['狀態/進度說明']||r._status,'b-'+(r['狀態/進度說明']||r._status))}}</td>
           <td style="font-size:12px;color:#4a5568">${{esc(appNo)}}</td>
           <td style="font-size:12px;color:#4a5568">${{esc(regNo)}}</td>
           <td>${{r._end_date?`<div style="font-size:11px;color:#6b7a99;margin-bottom:2px">${{esc(r._end_date)}}</div>`:''}}${{dlBadge(r._deadline_status)}}</td>
@@ -632,11 +637,11 @@ function renderTrademark() {{
     <thead><tr>
       <th onclick="sortBy('_name')">商標案件</th>
       <th onclick="sortBy('_country')">國別</th>
-      <th>類別</th>
-      <th onclick="sortBy('_status')">進度狀態</th>
+      <th>申請類別</th>
+      <th onclick="sortBy('_status')">狀態/進度說明</th>
       <th>申請案號</th>
-      <th>證書號／進度</th>
-      <th onclick="sortBy('_end_date')">使用期限</th>
+      <th>註冊號</th>
+      <th onclick="sortBy('_end_date')">使用期限（到期日）</th>
     </tr></thead>
     <tbody>${{tbody}}</tbody>
   </table>${{mkPager(total,pages)}}</div>`;
@@ -788,12 +793,6 @@ function renderAlerts() {{
       </div>`).join('')}}
       </div></div>`;
   }}).join('');
-  const na = ALL.filter(r=>r._dl==='N/A');
-  if (na.length) html += `<div style="margin-bottom:20px"><div class="section-title">無到期日 (N/A) (${{na.length}})</div>
-    <div class="ibox">共 ${{na.length}} 件案件登記無期限（N/A），無需展延。</div></div>`;
-  const missing = ALL.filter(r=>r._dl==='待補期限');
-  if (missing.length) html += `<div style="margin-bottom:20px"><div class="section-title">待補期限 (${{missing.length}})</div>
-    <div class="ibox">共 ${{missing.length}} 件案件尚無到期日記錄。</div></div>`;
   return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 ✓</div>';
 }}
 
@@ -818,16 +817,47 @@ function openMo(s) {{
   topHtml += '</div><hr style="border:none;border-top:1px solid #f0f4fa;margin:4px 0 12px"><div class="dg">';
 
   const hideSet = type==='產品登記' ? REG_HIDE : new Set();
-  const items = Object.entries(raw).filter(([k]) => !SKIP.has(k) && !hideSet.has(k.toLowerCase()))
-    .map(([k,v]) => `<div class="di${{FULL_COLS.has(k)?' full':''}}"><label>${{esc(k)}}</label><div class="dv">${{esc(v||'—')}}</div></div>`)
-    .join('');
+  let items;
+  if (type==='商標') {{
+    const tmCols = [
+      ['商標案件', raw['商標案件']||raw['商標']||raw['商標名稱']],
+      ['商標圖案', raw['商標圖案']||raw['商標圖示']||raw['圖片URL']||raw['圖片']],
+      ['商標類型', raw['商標分類']],
+      ['國別', raw['國別']],
+      ['類別', raw['申請類別']||raw['類別']],
+      ['申請案號', raw['申請案號']||raw['申請號']],
+      ['申請日期', raw['申請日期']],
+      ['狀態/進度說明', raw['狀態/進度說明']||raw['進度狀況']||raw['進度狀態']],
+      ['註冊號', raw['註冊編號']||raw['註冊號']||raw['證書號 (進度)']||raw['證書號(進度)']],
+      ['商標標示', raw['商標標示']],
+      ['使用期間-取得日期', raw['使用期間-起始']||raw['_start_date']],
+      ['使用期間-到期日期', raw['使用期間-到期']||raw['_end_date']],
+    ];
+    items = tmCols.map(([k,v]) => `<div class="di${{k==='商標圖案'?' full':''}}"><label>${{k}}</label><div class="dv">${{esc((v && !String(v).startsWith('#'))?v:'—')}}</div></div>`).join('');
+  }} else {{
+    items = Object.entries(raw).filter(([k,v]) => !SKIP.has(k) && !hideSet.has(k.toLowerCase()))
+      .map(([k,v]) => `<div class="di${{FULL_COLS.has(k)?' full':''}}"><label>${{esc(k)}}</label><div class="dv">${{esc(v||'—')}}</div></div>`)
+      .join('');
+  }}
   document.getElementById('mb').innerHTML = topHtml + items + '</div>';
   document.getElementById('mo').classList.add('open');
 }}
 function closeMo(e) {{ if (!e||e.target===document.getElementById('mo')) document.getElementById('mo').classList.remove('open'); }}
 
 // ── Export ────────────────────────────────────────────────────────────────
-function openExpMo() {{
+let expType = 'registration';
+function openExpMo(kind) {{
+  expType = kind || 'registration';
+  if (expType === 'trademark') {{
+    const keys = ['商標分類','商標案件','商標圖案','國別','申請案號','申請日期','申請類別','狀態/進度說明','註冊編號','商標標示','使用期間-起始','使用期間-到期'];
+    document.getElementById('expTitle').textContent = '匯出商標資料';
+    document.querySelector('#mode2Section h4').textContent = '模式 2：商標狀態／國別數量彙總';
+    document.getElementById('expColList').innerHTML = keys.map(k => `<label class="chk-item"><input type="checkbox" data-key="${{esc(k)}}" checked> ${{esc(k)}}</label>`).join('');
+    document.getElementById('mode2Preview').innerHTML = renderTrademarkSummary();
+    document.getElementById('expMo').classList.add('open');
+    return;
+  }}
+  document.getElementById('expTitle').textContent = '匯出產品登記資料';
   // Build column checkboxes from registration data
   const allKeys = new Set();
   RAW.registration.forEach(r => Object.keys(r).forEach(k => {{ if (!k.startsWith('_') && !REG_HIDE.has(k.toLowerCase())) allKeys.add(k); }}));
@@ -836,28 +866,60 @@ function openExpMo() {{
   const defaultOn = new Set(['登記產品名','登記類別','國別','登記公司','狀態','進度','證書有效期限']);
 
   document.getElementById('expColList').innerHTML = ordered.map(k =>
-    `<label class="chk-item"><input type="checkbox" id="exp_${{k}}" ${{defaultOn.has(k)?'checked':''}}> ${{esc(k)}}</label>`
+    `<label class="chk-item"><input type="checkbox" data-key="${{esc(k)}}" ${{defaultOn.has(k)?'checked':''}}> ${{esc(k)}}</label>`
   ).join('');
   document.getElementById('mode2Preview').innerHTML = '';
   document.getElementById('expMo').classList.add('open');
 }}
 function closeExpMo(e) {{ if (!e||e.target===document.getElementById('expMo')) document.getElementById('expMo').classList.remove('open'); }}
 
-function doMode1Export() {{
-  const cols = [...document.querySelectorAll('#expColList input:checked')].map(el => el.id.replace('exp_',''));
+function exportRows() {{
+  if (expType==='trademark') {{
+    let d=[...RAW.trademark],q=(flt.q||'').toLowerCase();
+    if(q)d=d.filter(r=>[r['商標案件'],r['申請案號'],r['國別'],r['註冊編號']].some(v=>String(v||'').toLowerCase().includes(q)));
+    if(flt.country!=='all')d=d.filter(r=>r['國別']===flt.country);
+    if(flt.tmSt!=='all')d=d.filter(r=>(r['狀態/進度說明']||r._status)===flt.tmSt);
+    return d;
+  }}
+  let d=[...RAW.registration],q=(flt.q||'').toLowerCase();
+  if(q)d=d.filter(r=>[r['登記產品名'],r['國別'],r['證書/License ID'],r['登記公司']].some(v=>String(v||'').toLowerCase().includes(q)));
+  if(flt.country!=='all')d=d.filter(r=>r['國別']===flt.country);
+  if(flt.rgSt!=='all')d=d.filter(r=>r._status===flt.rgSt);
+  if(flt.rgType!=='all')d=d.filter(r=>r['登記類別']===flt.rgType);
+  return d;
+}}
+function csvCell(v) {{ return '"'+String(v??'').replace(/"/g,'""')+'"'; }}
+function exportPDF(title,cols,rows) {{
+  const body=rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c]||'—')+'</td>').join('')+'</tr>').join('');
+  const w=window.open('','_blank');if(!w){{alert('請允許瀏覽器開啟彈出視窗後再匯出 PDF');return;}}
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>body{{font-family:Arial,"Noto Sans TC",sans-serif;padding:24px;color:#222}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #bbb;padding:5px;text-align:left;vertical-align:top}}th{{background:#eef2f7}}</style></head><body><h1>'+esc(title)+'</h1><p>匯出時間：'+esc(NOW_STR)+'；共 '+rows.length+' 筆</p><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+body+'</tbody></table></body></html>');
+  w.document.close();w.focus();setTimeout(()=>w.print(),250);
+}}
+
+function doMode1Export(fmt) {{
+  const cols = [...document.querySelectorAll('#expColList input:checked')].map(el => el.dataset.key);
+  const rows = exportRows();
   if (!cols.length) {{ alert('請至少勾選一個欄位'); return; }}
+  const prefix = expType==='trademark' ? '正瀚_商標' : '正瀚_產品登記';
+  if (fmt==='pdf') {{ exportPDF(prefix+'明細',cols,rows); return; }}
   const csv = '﻿' + [cols.join(','),
-    ...RAW.registration.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
+    ...rows.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
   ].join('\\n');
-  dlCSV(csv, '正瀚_產品登記_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+  dlCSV(csv, prefix+'_{TODAY_STR}'.replace(/\//g,'') + '.csv');
 }}
 
 function doMode2Preview() {{
-  const tbl = buildMode2Table();
-  document.getElementById('mode2Preview').innerHTML = renderMode2HTML(tbl);
+  document.getElementById('mode2Preview').innerHTML = expType==='trademark' ? renderTrademarkSummary() : renderMode2HTML(buildMode2Table());
 }}
 
-function doMode2Export() {{
+function doMode2Export(fmt) {{
+  if (expType==='trademark') {{
+    const tbl=buildTrademarkSummary(), cols=['國別','已取證','申請中','放棄案','合計'];
+    if(fmt==='pdf'){{exportPDF('商標狀態／國別彙總',cols,tbl.exportRows);return;}}
+    const csv='﻿'+[cols.map(csvCell).join(','),...tbl.exportRows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\\n');
+    dlCSV(csv,'正瀚_商標狀態彙總_{TODAY_STR}'.replace(/\//g,'')+'.csv');
+    return;
+  }}
   const tbl = buildMode2Table();
   const {{countries, types, data}} = tbl;
   const header = ['國別/登記類別', ...types, '合計'];
@@ -872,8 +934,30 @@ function doMode2Export() {{
     row.push(tot);
     return row;
   }});
+  const totalRow=['總計'];
+  types.forEach(t=>{{
+    let self=0,help=0;
+    countries.forEach(c=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};self+=x.self;help+=x.help;}});
+    totalRow.push('自行'+self+'/協助'+help);
+  }});
+  totalRow.push(countries.reduce((n,c)=>n+types.reduce((m,t)=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};return m+x.self+x.help;}},0),0));
+  rows.push(totalRow);
+  if(fmt==='pdf'){{const pdfRows=rows.map(row=>Object.fromEntries(header.map((h,i)=>[h,row[i]])));exportPDF('產品登記各國類別彙總',header,pdfRows);return;}}
   const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
   dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/\//g,'') + '.csv');
+}}
+
+function buildTrademarkSummary() {{
+  const labels=['已取證','申請中','放棄案'], data={{}};
+  const normalize=s=>{{s=String(s||'');if(s.includes('已取證')||s.includes('已取得'))return '已取證';if(s.includes('放棄')||s.includes('失效'))return '放棄案';return '申請中';}};
+  RAW.trademark.forEach(r=>{{const c=r['國別']||'未填寫',t=normalize(r['狀態/進度說明']||r._status);if(!data[c])data[c]={{'已取證':0,'申請中':0,'放棄案':0}};data[c][t]++;}});
+  const countries=Object.keys(data).sort(), exportRows=countries.map(c=>{{const r={{國別:c}};labels.forEach(t=>r[t]=data[c][t]);r['合計']=labels.reduce((n,t)=>n+r[t],0);return r;}});
+  const total={{國別:'總計'}};labels.forEach(t=>total[t]=exportRows.reduce((n,r)=>n+r[t],0));total['合計']=labels.reduce((n,t)=>n+total[t],0);exportRows.push(total);
+  return {{exportRows,exportCols:['國別',...labels,'合計']}};
+}}
+function renderTrademarkSummary() {{
+  const tbl=buildTrademarkSummary(), rows=tbl.exportRows.map(r=>'<tr><td class="rc">'+esc(r['國別'])+'</td><td>'+r['已取證']+'</td><td>'+r['申請中']+'</td><td>'+r['放棄案']+'</td><td><strong>'+r['合計']+'</strong></td></tr>').join('');
+  return '<table class="mode2-tbl"><thead><tr><th class="rc">國別</th><th>已取證</th><th>申請中</th><th>放棄案</th><th>合計</th></tr></thead><tbody>'+rows+'</tbody></table><div style="font-size:11px;color:#8899bb;margin-top:6px">申請中包含審查中與核駁案</div>';
 }}
 
 function buildMode2Table() {{
@@ -903,7 +987,9 @@ function renderMode2HTML({{countries, types, data}}) {{
     }}).join('');
     return `<tr><td class="rc">${{esc(c)}}</td>${{cells}}<td><strong>${{tot}}</strong></td></tr>`;
   }}).join('');
-  return `<table class="mode2-tbl"><thead>${{hdr}}</thead><tbody>${{rows}}</tbody></table>
+  const totals=types.map(t=>{{let self=0,help=0;countries.forEach(c=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};self+=x.self;help+=x.help;}});return '<td><strong>自行'+self+'/協助'+help+'</strong></td>';}}).join('');
+  const grand=countries.reduce((n,c)=>n+types.reduce((m,t)=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};return m+x.self+x.help;}},0),0);
+  return `<table class="mode2-tbl"><thead>${{hdr}}</thead><tbody>${{rows}}<tr><td class="rc"><strong>總計</strong></td>${{totals}}<td><strong>${{grand}}</strong></td></tr></tbody></table>
     <div style="font-size:11px;color:#8899bb;margin-top:6px">自行 = CH Biotech R&amp;D Co., Ltd；協助 = 非 CH Biotech（協助客戶取得）</div>`;
 }}
 

@@ -218,7 +218,7 @@ button{font:inherit;cursor:pointer}.btn-primary{background:var(--green)}.btn-out
     <div class="nav-section" style="margin-top:10px">設定</div>
     <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：2026/09/11 15:19<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：2026/09/11 16:37<br>© 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -278,8 +278,8 @@ async function unlockApp(e) {
   }
 }
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const REG_HIDE = new Set(["organic matter", "others", "raw materials", "n-p-k", "crops"]);
-const NOW_STR = '2026/09/11 15:19';
+const REG_HIDE = new Set(["raw materials", "crops", "organic matter", "n-p-k", "others"]);
+const NOW_STR = '2026/09/11 16:37';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
   patent:    '專利進度管理表',
@@ -339,7 +339,7 @@ function render() {
   }
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
-<div class="di"><label>最後同步時間</label><div class="dv">2026/09/11 15:19</div></div>
+<div class="di"><label>最後同步時間</label><div class="dv">2026/09/11 16:37</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">192 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">152 筆</div></div>

@@ -185,7 +185,7 @@ body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
     <div class="nav-section" style="margin-top:10px">設定</div>
     <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：2026/09/10 21:20<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：2026/09/11 11:17<br>© 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -245,8 +245,8 @@ async function unlockApp(e) {
   }
 }
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const REG_HIDE = new Set(["others", "raw materials", "organic matter", "crops", "n-p-k"]);
-const NOW_STR = '2026/09/10 21:20';
+const REG_HIDE = new Set(["organic matter", "crops", "n-p-k", "others", "raw materials"]);
+const NOW_STR = '2026/09/11 11:17';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
   patent:    '專利進度管理表',
@@ -306,7 +306,7 @@ function render() {
   }
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
-<div class="di"><label>最後同步時間</label><div class="dv">2026/09/10 21:20</div></div>
+<div class="di"><label>最後同步時間</label><div class="dv">2026/09/11 11:17</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">192 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">152 筆</div></div>
@@ -731,7 +731,7 @@ function doMode1Export(fmt) {
   const csv = '﻿' + [cols.join(','),
     ...rows.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
   ].join('\n');
-  dlCSV(csv, prefix+'_2026/09/10'.replace(/[/]/g,'') + '.csv');
+  dlCSV(csv, prefix+'_2026/09/11'.replace(/[/]/g,'') + '.csv');
 }
 
 function doMode2Preview() {
@@ -743,7 +743,7 @@ function doMode2Export(fmt) {
     const tbl=buildTrademarkSummary(), cols=['國別','已取證','申請中','放棄案','合計'];
     if(fmt==='pdf'){exportPDF('商標狀態／國別彙總',cols,tbl.exportRows);return;}
     const csv='﻿'+[cols.map(csvCell).join(','),...tbl.exportRows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\n');
-    dlCSV(csv,'正瀚_商標狀態彙總_2026/09/10'.replace(/[/]/g,'')+'.csv');
+    dlCSV(csv,'正瀚_商標狀態彙總_2026/09/11'.replace(/[/]/g,'')+'.csv');
     return;
   }
   const tbl = buildMode2Table();
@@ -770,7 +770,7 @@ function doMode2Export(fmt) {
   rows.push(totalRow);
   if(fmt==='pdf'){const pdfRows=rows.map(row=>Object.fromEntries(header.map((h,i)=>[h,row[i]])));exportPDF('產品登記各國類別彙總',header,pdfRows);return;}
   const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
-  dlCSV(csv, '正瀚_產品登記彙總_2026/09/10'.replace(/[/]/g,'') + '.csv');
+  dlCSV(csv, '正瀚_產品登記彙總_2026/09/11'.replace(/[/]/g,'') + '.csv');
 }
 
 function buildTrademarkSummary() {

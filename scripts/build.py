@@ -1114,6 +1114,7 @@ render();
     return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', HUB_JS + '\n</script>')
 
 HUB_CSS = r'''
+.chart-tools{display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px}.chart-tools button{font-size:12px;padding:5px 9px}#chart-dialog{width:min(1000px,94vw);max-height:90dvh;overflow:auto;border:1px solid #d8e6df;border-radius:16px;padding:24px;color:#173e35}#chart-dialog::backdrop{background:#082c2866}.dialog-close{float:right}.chart-enlarged{max-width:760px;margin:20px auto}.report-svg{display:block;width:360px;max-width:100%;height:auto;margin:20px auto}.report-legend{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e2ede6}.report-legend i{width:10px;height:10px;border-radius:50%}.report-bar{height:12px;background:#edf3f0;margin-bottom:14px}.report-bar i{display:block;height:100%}.report-options,.report-actions{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}.report-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:20px 0}.report-fields label{overflow-wrap:anywhere}#report-error{color:#a63232}
 :root{--green:#17715e;--ink:#17362f;--line:#dce7e3}
 body{background:#f2f6f5;color:var(--ink)}
 #sidebar{background:linear-gradient(180deg,#0a342c,#0c4035);width:236px;min-width:236px}
@@ -1234,6 +1235,7 @@ function chart(t){
   rows.forEach(r=>{const key=label(r);if(key!==null)counts.set(key,(counts.get(key)||0)+1);});
   const entries=custom?customGroups().map(g=>[g.label,g.rows.length]):[...counts],total=entries.reduce((sum,[,n])=>sum+n,0);
   const hue=s=>dimension==='country'?countryColor(s):custom?dimensionColor(s):color(s);
+  chartSnapshots[t]={title,dimension,mode:chartModes[t],rows:[...rows],total,entries:entries.map(([label,n])=>({label,n,color:hue(label)})),note:t==='patent'&&dimension==='status'?'放棄含失效、撤回；申請中併入審核中。':'',scope:custom?customTitle():TYPE_NAMES[t]+'全部案件',updated:NOW_STR};
   const action=i=>custom?`openCustomGroup(${i})`:`drillTo('${t}',${JSON.stringify(entries[i][0])},'${dimension}')`;
   let offset=0;
   const paths=entries.map(([s,n],i)=>{
@@ -1243,7 +1245,7 @@ function chart(t){
     const a=point(start),b=point(offset===1?offset-.000001:offset);
     return `<path d="M90 90 L${a} A72 72 0 ${n/total>.5?1:0} 1 ${b} Z" fill="${hue(s)}" onclick="${esc(action(i))}"><title>${esc(s)}：${n} 件 · ${(100*n/total).toFixed(1)}%</title></path>`;
   }).join('');
-  return `<article class="panel"><h2 class="chart-title">${esc(title)}</h2>${custom?'':`<label class="asset-dimension">比較指標 <select aria-label="${TYPE_NAMES[t]}比較指標" onchange="assetDimensions['${t}']=this.value;render()"><option value="country" ${dimension==='country'?'selected':''}>國家／地區</option><option value="status" ${dimension==='status'?'selected':''}>狀態</option></select></label>`}<select aria-label="${esc(title)}圖表形式" class="chart-mode" onchange="chartModes['${t}']=this.value;render()"><option value="donut" ${chartModes[t]==='donut'?'selected':''}>甜甜圈圖</option><option value="bar" ${chartModes[t]==='bar'?'selected':''}>橫向長條圖</option></select><div class="muted">${total} 件 · ${custom?'已確認分析資料庫':'全部案件 · 依'+(dimension==='country'?'國家／地區':'狀態')+'比較'}${rows.length>total?'（另有 '+(rows.length-total)+' 件狀態未對應，請至管理頁檢查）':''}</div>${custom?`<p class="chart-note">依「${{status:'狀態',country:'國家／地區',type:'資產類型'}[customDimension]}」彙總；占比以符合條件的 ${total} 件為分母。點圖例查看案件。</p>`:''}${t==='patent'&&dimension==='status'?'<small class="muted">放棄含失效、撤回；申請中併入審核中</small>':''}${!total?'<div class="empty">沒有符合條件的案件</div>':chartModes[t]==='donut'?`<svg class="donut" viewBox="0 0 180 180" role="img" aria-label="${esc(title)}分布">${paths}<circle cx="90" cy="90" r="51" fill="white"/><text x="90" y="98" text-anchor="middle">${total}</text></svg>`:''}${entries.map(([s,n],i)=>`<button class="legend-row" onclick="${esc(action(i))}"><i style="background:${hue(s)}"></i><span>${esc(s)}</span><small>${n} 件 · ${total?(100*n/total).toFixed(1):'0.0'}%</small></button>${chartModes[t]==='bar'?`<div class="bar-track"><i style="background:${hue(s)};width:${total?100*n/total:0}%"></i></div>`:''}`).join('')}${custom?customBreakdown():''}</article>`;
+  return `<article class="panel"><div class="chart-tools"><button class="btn-outline" onclick="openChartViewer(\'${t}\')" aria-label="放大${esc(title)}">⤢ 放大</button><button class="btn-outline" onclick="openChartExport(\'${t}\')">匯出</button></div><h2 class="chart-title">${esc(title)}</h2>${custom?'':`<label class="asset-dimension">比較指標 <select aria-label="${TYPE_NAMES[t]}比較指標" onchange="assetDimensions['${t}']=this.value;render()"><option value="country" ${dimension==='country'?'selected':''}>國家／地區</option><option value="status" ${dimension==='status'?'selected':''}>狀態</option></select></label>`}<select aria-label="${esc(title)}圖表形式" class="chart-mode" onchange="chartModes['${t}']=this.value;render()"><option value="donut" ${chartModes[t]==='donut'?'selected':''}>甜甜圈圖</option><option value="bar" ${chartModes[t]==='bar'?'selected':''}>橫向長條圖</option></select><div class="muted">${total} 件 · ${custom?'已確認分析資料庫':'全部案件 · 依'+(dimension==='country'?'國家／地區':'狀態')+'比較'}${rows.length>total?'（另有 '+(rows.length-total)+' 件狀態未對應，請至管理頁檢查）':''}</div>${custom?`<p class="chart-note">依「${{status:'狀態',country:'國家／地區',type:'資產類型'}[customDimension]}」彙總；占比以符合條件的 ${total} 件為分母。點圖例查看案件。</p>`:''}${t==='patent'&&dimension==='status'?'<small class="muted">放棄含失效、撤回；申請中併入審核中</small>':''}${!total?'<div class="empty">沒有符合條件的案件</div>':chartModes[t]==='donut'?`<svg class="donut" viewBox="0 0 180 180" role="img" aria-label="${esc(title)}分布">${paths}<circle cx="90" cy="90" r="51" fill="white"/><text x="90" y="98" text-anchor="middle">${total}</text></svg>`:''}${entries.map(([s,n],i)=>`<button class="legend-row" onclick="${esc(action(i))}"><i style="background:${hue(s)}"></i><span>${esc(s)}</span><small>${n} 件 · ${total?(100*n/total).toFixed(1):'0.0'}%</small></button>${chartModes[t]==='bar'?`<div class="bar-track"><i style="background:${hue(s)};width:${total?100*n/total:0}%"></i></div>`:''}`).join('')}${custom?customBreakdown():''}</article>`;
 }
 function openCustomGroup(i){
   const group=customGroups()[i];if(!group)return;
@@ -1314,6 +1316,62 @@ const viewSelections=new Map();
 const baseShowPage=showPage;showPage=function(n){viewSelections.set(pg,selection);selection=viewSelections.get(n)||Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));if(drill&&drill.t===n)selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));categoryFilter='all';baseShowPage(n);};
 const baseResetHub=resetHub;resetHub=function(){categoryFilter='all';flt.q='';cur=1;baseResetHub();};
 const baseHubRender=render;render=function(){baseHubRender();document.querySelectorAll('.hub-grid .panel').forEach(panel=>{const buttons=[...panel.querySelectorAll('.legend-row')];if(!buttons.length)return;const box=document.createElement('div');box.style.cssText='max-height:290px;overflow:auto;padding-right:4px';panel.insertBefore(box,buttons[0]);buttons.forEach(b=>{const bar=b.nextElementSibling?.classList.contains('bar-track')?b.nextElementSibling:null;box.append(b);if(bar)box.append(bar);});});const key=pg==='patent'?'專利類別':pg==='registration'?'登記類別':null;if(key){const vs=[...new Set(HUB.filter(r=>r.t===pg).map(r=>r.raw[key]).filter(Boolean))];document.querySelector('.fbar')?.insertAdjacentHTML('beforeend',`<select aria-label="${key}" onchange="categoryFilter=this.value;cur=1;render()"><option value="all">所有${key}</option>${vs.map(v=>`<option value="${esc(v)}" ${categoryFilter===v?'selected':''}>${esc(v)}</option>`).join('')}</select>`);}};
+// Chart reports use a snapshot of exactly the displayed analysis.
+const chartSnapshots={};
+let reportSnapshot=null,chartReturnFocus=null;
+const REPORT_STYLE=`body{font:14px Arial,"Microsoft JhengHei",sans-serif;color:#173e35;margin:24px}h1{font-size:22px;overflow-wrap:anywhere}h2{font-size:17px}p{line-height:1.6}.report-svg{display:block;width:320px;max-width:100%;height:auto;margin:20px auto}.report-legend{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #e4ece8;break-inside:avoid}.report-legend i{width:10px;height:10px;border-radius:50%}.report-bar{height:10px;background:#edf3f0;margin-bottom:12px;break-inside:avoid}.report-bar i{height:100%;display:block}table{border-collapse:collapse;width:100%;font-size:11px;table-layout:fixed}th,td{padding:6px;border:1px solid #cddcd5;overflow-wrap:anywhere;vertical-align:top}th{background:#edf4f0}thead{display:table-header-group}tr{break-inside:avoid}.report-graph{max-width:700px;margin:auto}.report-section{margin:24px 0}.print-button{padding:10px 18px;cursor:pointer}@page{size:A4 landscape;margin:12mm}@media print{body{margin:0}.print-button{display:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
+function reportGraph(s){
+  if(!s.total)return '<p>沒有符合條件的案件</p>';
+  let offset=0;
+  const paths=s.entries.filter(e=>e.n).map(e=>{const start=offset;offset+=e.n/s.total;const point=a=>[100+85*Math.cos(a*2*Math.PI-Math.PI/2),100+85*Math.sin(a*2*Math.PI-Math.PI/2)];return `<path d="M100 100 L${point(start)} A85 85 0 ${e.n/s.total>.5?1:0} 1 ${point(offset===1?offset-.000001:offset)} Z" fill="${e.color}"/>`;}).join('');
+  const svg=s.mode==='donut'?`<svg class="report-svg" viewBox="0 0 200 200" role="img" aria-label="${esc(s.title)}"><title>${esc(s.title)}</title>${paths}<circle cx="100" cy="100" r="60" fill="white"/><text x="100" y="108" text-anchor="middle" font-size="25" fill="#173e35">${s.total}</text></svg>`:'';
+  return '<div class="report-graph">'+svg+s.entries.map(e=>`<div class="report-legend"><i style="background:${e.color}"></i><span>${esc(e.label)}</span><span>${e.n} 件 · ${(100*e.n/s.total).toFixed(1)}%</span></div>${s.mode==='bar'?`<div class="report-bar"><i style="background:${e.color};width:${100*e.n/s.total}%"></i></div>`:''}`).join('')+'</div>';
+}
+function chartDialog(){
+  let d=document.getElementById('chart-dialog');
+  if(!d){d=document.createElement('dialog');d.id='chart-dialog';d.setAttribute('aria-labelledby','chart-dialog-title');document.body.append(d);d.addEventListener('click',e=>{if(e.target===d)d.close();});d.addEventListener('close',()=>chartReturnFocus?.focus());}
+  return d;
+}
+function reportHeading(s){return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p class="muted">${esc(s.scope)}<br>依${{country:'國家／地區',status:'狀態',type:'資產類型'}[s.dimension]}比較 · ${s.total} 件 · 資料時間：${esc(s.updated)}</p>${s.note?'<p>'+esc(s.note)+'</p>':''}${s.rows.length>s.total?'<p>另有 '+(s.rows.length-s.total)+' 件未對應圖表分類；完整明細仍保留。</p>':''}`;}
+function openChartViewer(t){
+  if(!chartSnapshots[t])return;chartReturnFocus=document.activeElement;reportSnapshot=chartSnapshots[t];const d=chartDialog();
+  d.innerHTML=`<button class="btn-outline dialog-close" onclick="document.getElementById('chart-dialog').close()">關閉 ×</button>${reportHeading(reportSnapshot)}<button class="btn-outline" onclick="openChartExport()">匯出這張圖</button><div class="chart-enlarged">${reportGraph(reportSnapshot)}</div>`;
+  if(!d.open)d.showModal();
+}
+function reportFields(s){return [...new Set(s.rows.flatMap(r=>Object.keys(r.raw).filter(k=>!k.startsWith('_'))))];}
+function openChartExport(t){
+  if(t){if(!chartSnapshots[t])return;reportSnapshot=chartSnapshots[t];chartReturnFocus=document.activeElement;}
+  if(!reportSnapshot)return;const d=chartDialog(),fields=reportFields(reportSnapshot);
+  d.innerHTML=`<button class="btn-outline dialog-close" onclick="document.getElementById('chart-dialog').close()">關閉 ×</button>${reportHeading(reportSnapshot)}<h3>勾選匯出內容</h3><div class="report-options"><label><input id="report-chart" type="checkbox" checked>圖表（PDF）</label><label><input id="report-summary" type="checkbox" checked>彙總數據：分類、件數、占比</label><label><input id="report-details" type="checkbox">案件詳細資訊</label></div><p class="chart-note">PDF：開啟報表後按「列印／另存 PDF」。CSV：輸出勾選的數據與明細，不包含圖形。</p><details><summary>詳細資訊欄位（基本欄位固定保留，可加選原始欄位）</summary><p>基本欄位：案件名稱、資產類型、國家、原始狀態、到期日。</p><button class="btn-outline" onclick="selectReportFields(true)">全選</button><button class="btn-outline" onclick="selectReportFields(false)">取消全選</button><div class="report-fields">${fields.map((k,i)=>`<label><input type="checkbox" name="report-field" value="${i}">${esc(k)}</label>`).join('')}</div></details><div class="report-actions"><button class="btn-outline" onclick="exportChartReport('pdf')">匯出 PDF</button><button class="btn-outline" onclick="exportChartReport('csv')">下載 CSV</button></div><p id="report-error" role="status"></p>`;
+  if(!d.open)d.showModal();
+}
+function selectReportFields(on){document.querySelectorAll('#chart-dialog input[name="report-field"]').forEach(el=>el.checked=on);}
+function reportTables(s,summary,details,fields){
+  const tables=[];
+  if(summary)tables.push({title:'彙總數據',headers:['分類','件數','占比（%）'],rows:s.entries.map(e=>[e.label,e.n,s.total?(100*e.n/s.total).toFixed(1):'0.0'])});
+  if(details)tables.push({title:'案件詳細資訊',headers:['案件名稱','資產類型','國家','原始狀態','到期日',...fields],rows:s.rows.map(r=>[r.name,TYPE_NAMES[r.t],r.c,r.s,r.date,...fields.map(k=>r.raw[k]??'')])});
+  return tables;
+}
+function reportTableHTML(table){
+  // Split very wide field sets into readable print sections; keep case identity in each.
+  const chunks=[];for(let i=1;i<table.headers.length;i+=7)chunks.push([0,...Array.from({length:Math.min(7,table.headers.length-i)},(_,j)=>i+j)]);
+  return chunks.map((cols,i)=>'<section class="report-section"><h2>'+esc(table.title)+(chunks.length>1?' · 欄位組 '+(i+1):'')+'</h2><table><thead><tr>'+cols.map(k=>'<th>'+esc(table.headers[k])+'</th>').join('')+'</tr></thead><tbody>'+table.rows.map(row=>'<tr>'+cols.map(k=>'<td>'+esc(row[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table></section>').join('');
+}
+function chartCSV(s,tables){
+  const cell=v=>{let text=String(v??'');if(/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
+  const rows=[['分析範圍',s.scope],['比較指標',s.dimension],['資料時間',s.updated],['圖表案件數',s.total],['分類說明',s.note]];
+  tables.forEach(t=>rows.push([], [t.title],t.headers,...t.rows));
+  return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n');
+}
+function exportChartReport(format){
+  const s=reportSnapshot;if(!s)return;
+  const graph=document.getElementById('report-chart').checked,summary=document.getElementById('report-summary').checked,details=document.getElementById('report-details').checked,error=document.getElementById('report-error');
+  if(!(summary||details||(format==='pdf'&&graph))){error.textContent=format==='csv'?'CSV 請至少勾選彙總數據或案件詳細資訊。':'請至少勾選一項輸出內容。';return;}
+  const all=reportFields(s),fields=[...document.querySelectorAll('#chart-dialog input[name="report-field"]:checked')].map(el=>all[Number(el.value)]).filter(v=>v!==undefined),tables=reportTables(s,summary,details,fields);error.textContent='';
+  if(format==='csv'){const url=URL.createObjectURL(new Blob([chartCSV(s,tables)],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='CH_IP_圖表資料_'+s.updated.slice(0,10).replaceAll('/','-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;}
+  const w=window.open('','_blank');if(!w){error.textContent='請允許此網站開啟彈出式視窗後重試。';return;}
+  w.opener=null;w.document.write('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(s.title)+' 圖表報告</title><style>'+REPORT_STYLE+'</style></head><body><button class="print-button" onclick="window.print()">列印／另存 PDF</button>'+reportHeading(s)+(graph?reportGraph(s):'')+tables.map(reportTableHTML).join('')+'</body></html>');w.document.close();
+}
 document.getElementById('nba').textContent=upcomingRows().length;
 render();
 '''

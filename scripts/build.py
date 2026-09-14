@@ -290,6 +290,9 @@ def process_trademark(records):
 
 def process_patent(records):
     for r in records:
+        for field in ('技術平台', '技術物質', '專利類型', '對象作物'):
+            source = 'AI_' + field if 'AI_' + field in r else field
+            r[field] = format_cell_value(r.get(source, ''))
         r['_status'] = patent_status(r.get('目前狀態', ''))
         end_raw = (r.get('證書到期日') or '').strip()
         end_date, dl = calc_deadline(end_raw)
@@ -1204,12 +1207,25 @@ const HUB=Object.entries(RAW).flatMap(([t,rows])=>rows.map((r,i)=>({id:t+'-'+i,t
 const byId=new Map(HUB.map(r=>[r.id,r]));
 const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
 const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
-function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]||'未填寫').trim()||'未填寫';}
-const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare(b,'zh-Hant')),type:Object.keys(TYPE_NAMES),status:['已完成','進行中','需處理','已放棄'],...Object.fromEntries(Object.keys(ANALYSIS_KEYS).map(k=>[k,[...new Set(HUB.map(r=>analysisValue(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'))]))};
+function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]??r.raw['AI_'+ANALYSIS_KEYS[k]]??'未填寫').trim()||'未填寫';}
+// Split explicit list separators outside parentheses; retain chemical names and translations.
+function analysisValues(r,k){
+  const text=analysisValue(r,k);let depth=0,part='',values=[];
+  for(const c of text){
+    if('（('.includes(c))depth++;
+    if('）)'.includes(c))depth=Math.max(0,depth-1);
+    if(depth===0&&'、;；\n\r'.includes(c)){if(part.trim())values.push(part.trim());part='';}
+    else part+=c;
+  }
+  if(part.trim())values.push(part.trim());
+  return [...new Set(values.length?values:['未填寫'])];
+}
+function analysisMatches(r,k,scope){return analysisValues(r,k).some(v=>scope[k].has(v));}
+const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare(b,'zh-Hant')),type:Object.keys(TYPE_NAMES),status:['已完成','進行中','需處理','已放棄'],...Object.fromEntries(Object.keys(ANALYSIS_KEYS).map(k=>[k,[...new Set(HUB.filter(r=>r.t==='patent').flatMap(r=>analysisValues(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'))]))};
 let selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));
 let chartModes={trademark:'donut',patent:'donut',registration:'donut'},drill=null,globalQuery='',lastFocus=null;
 esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&Object.keys(ANALYSIS_KEYS).every(k=>selection[k].has(analysisValue(r,k)));}
+function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&(r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,selection)));}
 function rank(r){if(managementStatus(r)==='已完成')return 0;if(managementStatus(r)==='進行中')return 1;if(/核駁/.test(r.s))return 2;if(/結案/.test(r.s))return 3;if(/放棄|失效|撤回/.test(r.s))return 4;return 5;}
 function dateValue(r){return /^\d{4}-\d{2}-\d{2}$/.test(r.date)?Date.parse(r.date):Infinity;}
 function defaultOrder(a,b){return rank(a)-rank(b)||(dateValue(a)-dateValue(b)||0);}
@@ -1234,32 +1250,33 @@ function patentStatus(r){
 }
 function chartStatus(r){return r.t==='patent'?patentStatus(r):r.s;}
 function visibleChoices(k){
+  if(k==='substance')return CHOICES.substance.filter(v=>HUB.some(r=>r.t==='patent'&&analysisMatches(r,'platform',selection)&&analysisValues(r,k).includes(v)));
   if(TYPE_NAMES[pg]&&k==='country')return CHOICES.country.filter(v=>HUB.some(r=>r.t===pg&&r.c===v));
-  if(TYPE_NAMES[pg]&&k!=='country'&&k!=='type'&&k!=='status')return CHOICES[k].filter(v=>HUB.some(r=>r.t===pg&&analysisValue(r,k)===v));
+  if(TYPE_NAMES[pg]&&k!=='country'&&k!=='type'&&k!=='status')return CHOICES[k].filter(v=>HUB.some(r=>r.t===pg&&analysisValues(r,k).includes(v)));
   return CHOICES[k];
 }
 function filterHTML(){
-  const keys=TYPE_NAMES[pg]?['country','status','platform','substance','patentType','crop']:['country','type','status','platform','substance','patentType','crop'];
+  const keys=TYPE_NAMES[pg]?['country','status']:['country','type','status'];if(pg==='patent'||pg==='overview')keys.push(...Object.keys(ANALYSIS_KEYS));
   return '<div class="panel hub-filters">'+keys.map(k=>{
     const vs=visibleChoices(k);
-    return `<details class="hub-filter" name="hub-filter-menu"><summary onclick="closeOtherFilters(this.parentElement)">${{country:'國家／地區',type:'資產類型',status:'狀態'}[k]} · ${vs.filter(v=>selection[k].has(v)).length}/${vs.length} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="selectGroup('${k}',true)">全選</button><button class="btn-outline" onclick="selectGroup('${k}',false)">取消全選</button>${vs.map(v=>`<label><input type="checkbox" ${selection[k].has(v)?'checked':''} onchange="changeSelection('${k}',${CHOICES[k].indexOf(v)},this.checked)">${esc(k==='type'?TYPE_NAMES[v]:v)}</label>`).join('')}</div></details>`;
+    return `<details class="hub-filter" name="hub-filter-menu"><summary onclick="closeOtherFilters(this.parentElement)">${{country:'國家／地區',type:'資產類型',status:'狀態',...ANALYSIS_LABELS}[k]} · ${vs.filter(v=>selection[k].has(v)).length}/${vs.length} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="selectGroup('${k}',true)">全選</button><button class="btn-outline" onclick="selectGroup('${k}',false)">取消全選</button>${vs.map(v=>`<label><input type="checkbox" ${selection[k].has(v)?'checked':''} onchange="changeSelection('${k}',${CHOICES[k].indexOf(v)},this.checked)">${esc(k==='type'?TYPE_NAMES[v]:v)}</label>`).join('')}</div></details>`;
   }).join('')+'<button class="btn-outline" onclick="resetHub()">重設全部</button></div>';
 }
-function changeSelection(k,i,on){on?selection[k].add(CHOICES[k][i]):selection[k].delete(CHOICES[k][i]);cur=1;refreshHub();}
-const baseFilterHTML=filterHTML;
-filterHTML=function(){let html=baseFilterHTML();['技術平台','技術物質','專利類型','對象作物'].forEach(label=>{html=html.replace('undefined ·',label+' ·');});return html;};
-function selectGroup(k,on){visibleChoices(k).forEach(v=>on?selection[k].add(v):selection[k].delete(v));cur=1;refreshHub();}
+function changeSelection(k,i,on){on?selection[k].add(CHOICES[k][i]):selection[k].delete(CHOICES[k][i]);syncSubstances(k);cur=1;refreshHub();}
+// Platform changes select all substances present in the newly selected platforms.
+function syncSubstances(k){if(k==='platform')selection.substance=new Set(visibleChoices('substance'));}
+function selectGroup(k,on){visibleChoices(k).forEach(v=>on?selection[k].add(v):selection[k].delete(v));syncSubstances(k);cur=1;refreshHub();}
 function resetHub(){selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));drill=null;render();}
 function closeOtherFilters(current){document.querySelectorAll('.hub-filter[open]').forEach(menu=>{if(menu!==current)menu.open=false;});}
 function refreshHub(){const open=[...document.querySelectorAll('.hub-filter')].map(x=>x.open);render();document.querySelectorAll('.hub-filter').forEach((x,i)=>x.open=open[i]);}
 function drillTo(t,s,dimension='status'){drill={t,s,dimension};showPage(t);}
-function matchesDrill(r){return !drill||r.t!==drill.t||(drill.dimension==='country'?r.c:chartStatus(r))===drill.s;}
+function matchesDrill(r){return !drill||r.t!==drill.t||(ANALYSIS_KEYS[drill.dimension]?analysisValues(r,drill.dimension).includes(drill.s):(drill.dimension==='country'?r.c:chartStatus(r))===drill.s);}
 const assetDimensions={trademark:'status',patent:'status',registration:'status'};
 
 let customDimension='status',analysisScope=null;
 function analysisRows(){
   if(!analysisScope)return [];
-  return HUB.filter(r=>analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r))&&Object.keys(ANALYSIS_KEYS).every(k=>analysisScope[k].has(analysisValue(r,k))));
+  return HUB.filter(r=>(!ANALYSIS_KEYS[customDimension]||r.t==='patent')&&analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r))&&(r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,analysisScope))));
 }
 function scopeChanged(){
   return !analysisScope||Object.keys(CHOICES).some(k=>CHOICES[k].some(v=>selection[k].has(v)!==analysisScope[k].has(v)));
@@ -1273,21 +1290,21 @@ function analysisControls(){
   const pending=HUB.filter(selected).length,dirty=scopeChanged();
   return '<h2 class="section-title">1. 選定分析資料庫範圍</h2><p class="muted">先選擇納入分析的資產、國家與狀態，再確認這批資料。</p>'+filterHTML()+
     `<div class="custom-axis"><button class="btn-outline confirm-scope" onclick="confirmAnalysisScope()">${analysisScope?'更新分析資料庫':'確認分析資料庫'}</button><span>目前選取 ${pending} 件</span><small class="muted" role="status">${analysisScope?(dirty?'範圍已修改，按「更新分析資料庫」後套用；下圖仍使用上次確認資料。':'已確認 '+analysisRows().length+' 件，可切換比較指標。'):'尚未確認資料範圍'}</small></div>`+
-    `<fieldset id="comparison-controls" class="comparison-controls" ${analysisScope?'':'disabled'}><legend>2. 選擇比較圖指標</legend><div class="custom-axis"><label>比較指標 <select aria-label="比較指標" onchange="customDimension=this.value;render()">${['country','type','status'].map(k=>`<option value="${k}" ${customDimension===k?'selected':''}>${{status:'各狀態案件比較',country:'各國家／地區案件比較',type:'各資產類型案件比較'}[k]}</option>`).join('')}</select></label><label>圖表形式 <select aria-label="比較圖形式" onchange="chartModes.custom=this.value;render()"><option value="donut" ${chartModes.custom==='donut'?'selected':''}>甜甜圈圖（占比）</option><option value="bar" ${chartModes.custom==='bar'?'selected':''}>橫向長條圖（件數與占比）</option></select></label></div><p class="chart-note">比較同一批資料的案件數與占比；切換指標不會改變分析範圍。</p></fieldset>`;
+    `<fieldset id="comparison-controls" class="comparison-controls" ${analysisScope?'':'disabled'}><legend>2. 選擇比較圖指標</legend><div class="custom-axis"><label>比較指標 <select aria-label="比較指標" onchange="customDimension=this.value;render()">${['country','type','status',...Object.keys(ANALYSIS_KEYS)].map(k=>`<option value="${k}" ${customDimension===k?'selected':''}>${{status:'各狀態案件比較',country:'各國家／地區案件比較',type:'各資產類型案件比較',...ANALYSIS_LABELS}[k]}</option>`).join('')}</select></label><label>圖表形式 <select aria-label="比較圖形式" onchange="chartModes.custom=this.value;render()"><option value="donut" ${chartModes.custom==='donut'?'selected':''}>甜甜圈圖（占比）</option><option value="bar" ${chartModes.custom==='bar'?'selected':''}>橫向長條圖（件數與占比）</option></select></label></div><p class="chart-note">四項專利指標僅分析範圍內的專利；商標與產品登記不納入。多值欄位拆分統計，同案可列入多項；占比以分類計次總數為分母，空白顯示未填寫。</p></fieldset>`;
 }
 chartModes.custom='donut';
 function chart(t){
   const custom=t==='custom',title=custom?customTitle():TYPE_NAMES[t];
   if(custom&&!analysisScope)return '<article class="panel"><h2>比較圖</h2><div class="empty">請先完成步驟 1，確認分析資料庫，再選擇比較指標。</div></article>';
-  const rows=custom?analysisRows():HUB.filter(r=>r.t===t);
+  const rows=custom?analysisRows():HUB.filter(r=>r.t===t&&(t!=='patent'||(selected(r)&&(pg!=='patent'||(matchesDrill(r)&&[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(flt.q.toLowerCase()))))));
   const dimension=custom?customDimension:assetDimensions[t];
-  const label=r=>custom?(customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r)):dimension==='country'?r.c:chartStatus(r);
+  const label=r=>ANALYSIS_KEYS[dimension]?analysisValue(r,dimension):custom?(customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r)):dimension==='country'?r.c:chartStatus(r);
   const counts=new Map();
   if(t==='patent'&&dimension==='status')['審核中','領證中','放棄','專利通過'].forEach(v=>counts.set(v,0));
-  rows.forEach(r=>{const key=label(r);if(key!==null)counts.set(key,(counts.get(key)||0)+1);});
+  rows.forEach(r=>{const labels=ANALYSIS_KEYS[dimension]?analysisValues(r,dimension):[label(r)];labels.forEach(key=>{if(key!==null)counts.set(key,(counts.get(key)||0)+1);});});
   const entries=custom?customGroups().map(g=>[g.label,g.rows.length]):[...counts],total=entries.reduce((sum,[,n])=>sum+n,0);
-  const hue=s=>dimension==='country'?countryColor(s):custom?dimensionColor(s):color(s);
-  chartSnapshots[t]={title,dimension,mode:chartModes[t],rows:[...rows],total,entries:entries.map(([label,n])=>({label,n,color:hue(label)})),note:t==='patent'&&dimension==='status'?'放棄含失效、撤回；申請中併入審核中。':'',scope:custom?customTitle():TYPE_NAMES[t]+'全部案件',updated:NOW_STR};
+  const hue=s=>ANALYSIS_KEYS[dimension]?'hsl('+((Math.max(0,CHOICES[dimension].indexOf(s))*137.508+165)%360)+' 52% 42%)':dimension==='country'?countryColor(s):custom?dimensionColor(s):color(s);
+  chartSnapshots[t]={title,dimension,mode:chartModes[t],rows:[...rows],total,entries:entries.map(([label,n])=>({label,n,color:hue(label)})),note:ANALYSIS_KEYS[dimension]?rows.length+' 件專利；'+total+' 分類計次。同案可列入多项，占比以分類計次總數為分母。':t==='patent'&&dimension==='status'?'放棄含失效、撤回；申請中併入審核中。':'',scope:custom?customTitle():TYPE_NAMES[t]+(t==='patent'?'符合篩選案件':'全部案件'),updated:NOW_STR};
   const action=i=>custom?`openCustomGroup(${i})`:`drillTo('${t}',${JSON.stringify(entries[i][0])},'${dimension}')`;
   let offset=0;
   const paths=entries.map(([s,n],i)=>{
@@ -1297,7 +1314,7 @@ function chart(t){
     const a=point(start),b=point(offset===1?offset-.000001:offset);
     return `<path d="M90 90 L${a} A72 72 0 ${n/total>.5?1:0} 1 ${b} Z" fill="${hue(s)}" onclick="${esc(action(i))}"><title>${esc(s)}：${n} 件 · ${(100*n/total).toFixed(1)}%</title></path>`;
   }).join('');
-  return `<article class="panel"><div class="chart-tools"><button class="btn-outline" onclick="openChartViewer(\'${t}\')" aria-label="放大${esc(title)}">⤢ 放大</button><button class="btn-outline" onclick="openChartExport(\'${t}\')">匯出</button></div><h2 class="chart-title">${esc(title)}</h2>${custom?'':`<label class="asset-dimension">比較指標 <select aria-label="${TYPE_NAMES[t]}比較指標" onchange="assetDimensions['${t}']=this.value;render()"><option value="country" ${dimension==='country'?'selected':''}>國家／地區</option><option value="status" ${dimension==='status'?'selected':''}>狀態</option></select></label>`}<select aria-label="${esc(title)}圖表形式" class="chart-mode" onchange="chartModes['${t}']=this.value;render()"><option value="donut" ${chartModes[t]==='donut'?'selected':''}>甜甜圈圖</option><option value="bar" ${chartModes[t]==='bar'?'selected':''}>橫向長條圖</option></select><div class="muted">${total} 件 · ${custom?'已確認分析資料庫':'全部案件 · 依'+(dimension==='country'?'國家／地區':'狀態')+'比較'}${rows.length>total?'（另有 '+(rows.length-total)+' 件狀態未對應，請至管理頁檢查）':''}</div>${custom?`<p class="chart-note">依「${{status:'狀態',country:'國家／地區',type:'資產類型'}[customDimension]}」彙總；占比以符合條件的 ${total} 件為分母。點圖例查看案件。</p>`:''}${t==='patent'&&dimension==='status'?'<small class="muted">放棄含失效、撤回；申請中併入審核中</small>':''}${!total?'<div class="empty">沒有符合條件的案件</div>':chartModes[t]==='donut'?`<svg class="donut" viewBox="0 0 180 180" role="img" aria-label="${esc(title)}分布">${paths}<circle cx="90" cy="90" r="51" fill="white"/><text x="90" y="98" text-anchor="middle">${total}</text></svg>`:''}${entries.map(([s,n],i)=>`<button class="legend-row" onclick="${esc(action(i))}"><i style="background:${hue(s)}"></i><span>${esc(s)}</span><small>${n} 件 · ${total?(100*n/total).toFixed(1):'0.0'}%</small></button>${chartModes[t]==='bar'?`<div class="bar-track"><i style="background:${hue(s)};width:${total?100*n/total:0}%"></i></div>`:''}`).join('')}${custom?customBreakdown():''}</article>`;
+  return `<article class="panel"><div class="chart-tools"><button class="btn-outline" onclick="openChartViewer(\'${t}\')" aria-label="放大${esc(title)}">⤢ 放大</button><button class="btn-outline" onclick="openChartExport(\'${t}\')">匯出</button></div><h2 class="chart-title">${esc(title)}</h2>${custom?'':`<label class="asset-dimension">比較指標 <select aria-label="${TYPE_NAMES[t]}比較指標" onchange="assetDimensions['${t}']=this.value;render()"><option value="country" ${dimension==='country'?'selected':''}>國家／地區</option><option value="status" ${dimension==='status'?'selected':''}>狀態</option>${t==='patent'?Object.entries(ANALYSIS_LABELS).map(([k,v])=>`<option value="${k}" ${dimension===k?'selected':''}>${v}</option>`).join(''):''}</select></label>`}<select aria-label="${esc(title)}圖表形式" class="chart-mode" onchange="chartModes['${t}']=this.value;render()"><option value="donut" ${chartModes[t]==='donut'?'selected':''}>甜甜圈圖</option><option value="bar" ${chartModes[t]==='bar'?'selected':''}>橫向長條圖</option></select><div class="muted">${ANALYSIS_KEYS[dimension]?rows.length+' 件專利 · '+total+' 分類計次':total+' 件'} · ${custom?'已確認分析資料庫':(t==='patent'?'符合篩選案件':'全部案件')+' · 依'+(ANALYSIS_LABELS[dimension]||(dimension==='country'?'國家／地區':'狀態'))+'比較'}${rows.length>total?'（另有 '+(rows.length-total)+' 件狀態未對應，請至管理頁檢查）':''}</div>${custom?`<p class="chart-note">依「${{status:'狀態',country:'國家／地區',type:'資產類型',...ANALYSIS_LABELS}[customDimension]}」彙總；占比以 ${total} ${ANALYSIS_KEYS[dimension]?'分類計次':'件案件'}為分母。點圖例查看案件。</p>`:''}${ANALYSIS_KEYS[dimension]?'<p class="chart-note">同案可列入多項；占比以分類計次總數為分母。原始資料保留完整儲存格內容。</p>':''}${t==='patent'&&dimension==='status'?'<small class="muted">放棄含失效、撤回；申請中併入審核中</small>':''}${!total?'<div class="empty">沒有符合條件的案件</div>':chartModes[t]==='donut'?`<svg class="donut" viewBox="0 0 180 180" role="img" aria-label="${esc(title)}分布">${paths}<circle cx="90" cy="90" r="51" fill="white"/><text x="90" y="98" text-anchor="middle">${total}</text></svg>`:''}${entries.map(([s,n],i)=>`<button class="legend-row" onclick="${esc(action(i))}"><i style="background:${hue(s)}"></i><span>${esc(s)}</span><small>${n} 件 · ${total?(100*n/total).toFixed(1):'0.0'}%</small></button>${chartModes[t]==='bar'?`<div class="bar-track"><i style="background:${hue(s)};width:${total?100*n/total:0}%"></i></div>`:''}`).join('')}${custom?customBreakdown():''}</article>`;
 }
 function openCustomGroup(i){
   const group=customGroups()[i];if(!group)return;
@@ -1316,14 +1333,14 @@ function customTitle(){
   }).join(' / ');
 }
 function customGroups(){
-  const groups=new Map(),get=r=>customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r);
-  analysisRows().forEach(r=>{const label=get(r);if(!groups.has(label))groups.set(label,[]);groups.get(label).push(r);});
+  const groups=new Map(),get=r=>ANALYSIS_KEYS[customDimension]?analysisValue(r,customDimension):customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r);
+  analysisRows().forEach(r=>{const labels=ANALYSIS_KEYS[customDimension]?analysisValues(r,customDimension):[get(r)];labels.forEach(label=>{if(!groups.has(label))groups.set(label,[]);groups.get(label).push(r);});});
   return [...groups].map(([label,rows])=>({label,rows})).sort((a,b)=>b.rows.length-a.rows.length||a.label.localeCompare(b.label,'zh-Hant'));
 }
 function countryColor(label){const i=CHOICES.country.indexOf(label);return 'hsl('+((Math.max(0,i)*137.508+165)%360).toFixed(1)+' 52% 42%)';}
 function dimensionColor(label){
   if(customDimension==='status')return color(label);
-  const values=customDimension==='country'?CHOICES.country:Object.values(TYPE_NAMES),i=values.indexOf(label);
+  const values=CHOICES[customDimension]||(customDimension==='country'?CHOICES.country:Object.values(TYPE_NAMES)),i=values.indexOf(label);
   return 'hsl('+((Math.max(0,i)*137.508+165)%360).toFixed(1)+' 52% 42%)';
 }
 function customCombinations(){
@@ -1345,7 +1362,7 @@ function upcomingRows(){
 }
 function listTable(rows){return `<div class="twrap hub-alerts"><table><thead><tr>${['案件名稱','資產類型','國家','狀態','到期日','提醒'].map(s=>'<th>'+s+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')"><td>${esc(r.name)}</td><td>${TYPE_NAMES[r.t]}</td><td>${esc(r.c)}</td><td>${esc(r.s)}</td><td>${esc(r.date||'—')}</td><td>${esc(attention(r)?.[1]||'正常')}</td></tr>`).join('')||'<tr><td colspan="6">沒有符合條件的案件</td></tr>'}</tbody></table></div>`;}
 const COLS={trademark:[['商標名',r=>r.name],['國別',r=>r.c],['申請類別',r=>r.raw['申請類別']||r.raw['類別']],['狀態/進度說明',r=>r.s],['申請案號',r=>r.raw['申請案號']||r.raw['申請號']],['註冊號',r=>r.raw['註冊編號']||r.raw['註冊號']||r.raw['證書號 (進度)']],['使用期限（到期日）',r=>r.date]],patent:[['專利名稱（中文）',r=>r.name],['國別',r=>r.c],['申請案號',r=>r.raw['申請案號']],['專利編號',r=>r.raw['專利編號']],['目前狀態',r=>r.s],['證書到期日',r=>r.date]],registration:[['登記產品名',r=>r.name],['國別',r=>r.c],['登記類別',r=>r.raw['登記類別']],['登記公司',r=>r.raw['登記公司']],['狀態',r=>r.s],['有效期限',r=>r.date]]};
-function management(t){let rows=HUB.filter(r=>r.t===t&&selected(r)&&matchesDrill(r));const q=flt.q.toLowerCase();if(q)rows=rows.filter(r=>[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(q));rows.sort(defaultOrder);if(srt.col!==null){const get=COLS[t][Number(srt.col)]?.[1];if(get)rows.sort((a,b)=>String(get(a)||'').localeCompare(String(get(b)||''),'zh-Hant')*(srt.asc?1:-1));}const pages=Math.ceil(rows.length/pp)||1;cur=Math.min(cur,pages);const visible=rows.slice((cur-1)*pp,cur*pp);return filterHTML()+`<div class="fbar"><input aria-label="搜尋目前案件" value="${esc(flt.q)}" placeholder="搜尋名稱、國家、狀態、案號" oninput="hubLocalSearch(this)"><span class="rcount">共 ${rows.length} 筆</span>${drill?'<button class="btn-outline" onclick="drill=null;render()">清除圖表選取</button>':''}</div><div class="twrap"><table><thead><tr>${COLS[t].map(([name],i)=>`<th onclick="sortBy('${i}')">${name} ↕</th>`).join('')}</tr></thead><tbody>${visible.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')">${COLS[t].map(([,get],i)=>'<td>'+esc(get(r)||'—')+(i===0&&t==='patent'?'<div class="cs">'+esc(r.raw['專利類別']||'')+'</div>':'')+'</td>').join('')}</tr>`).join('')||'<tr><td colspan="7">沒有符合條件的案件</td></tr>'}</tbody></table></div>${mkPager(rows.length,pages)}`;}
+function management(t){let rows=HUB.filter(r=>r.t===t&&selected(r)&&matchesDrill(r));const q=flt.q.toLowerCase();if(q)rows=rows.filter(r=>[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(q));rows.sort(defaultOrder);if(srt.col!==null){const get=COLS[t][Number(srt.col)]?.[1];if(get)rows.sort((a,b)=>String(get(a)||'').localeCompare(String(get(b)||''),'zh-Hant')*(srt.asc?1:-1));}const pages=Math.ceil(rows.length/pp)||1;cur=Math.min(cur,pages);const visible=rows.slice((cur-1)*pp,cur*pp);return filterHTML()+(t==='patent'?'<div class="hub-grid" style="grid-template-columns:minmax(0,1fr)">'+chart('patent')+'</div>':'')+`<div class="fbar"><input aria-label="搜尋目前案件" value="${esc(flt.q)}" placeholder="搜尋名稱、國家、狀態、案號" oninput="hubLocalSearch(this)"><span class="rcount">共 ${rows.length} 筆</span>${drill?'<button class="btn-outline" onclick="drill=null;render()">清除圖表選取</button>':''}</div><div class="twrap"><table><thead><tr>${COLS[t].map(([name],i)=>`<th onclick="sortBy('${i}')">${name} ↕</th>`).join('')}</tr></thead><tbody>${visible.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')">${COLS[t].map(([,get],i)=>'<td>'+esc(get(r)||'—')+(i===0&&t==='patent'?'<div class="cs">'+esc(r.raw['專利類別']||'')+'</div>':'')+'</td>').join('')}</tr>`).join('')||'<tr><td colspan="7">沒有符合條件的案件</td></tr>'}</tbody></table></div>${mkPager(rows.length,pages)}`;}
 function hubLocalSearch(input){const pos=input.selectionStart;flt.q=input.value;cur=1;render();const next=document.querySelector('[aria-label="搜尋目前案件"]');next.focus();next.setSelectionRange(pos,pos);}
 const legacyRender=render;
 render=function(){const content=document.getElementById('content');document.getElementById('topbar-actions').innerHTML='';const header=`<div class="hub-head"><h1>${PAGE_TITLES[pg]||'搜尋結果'}</h1>${pg==='overview'?`<small>資料更新：${NOW_STR}（台灣時間） · Google Sheets</small>`:''}</div>`;let body='';if(pg==='overview'){const alertRows=upcomingRows();body=analysisControls()+'<div class="hub-grid">'+[...Object.keys(TYPE_NAMES),'custom'].map(chart).join('')+'</div><div id="custom-results"></div><h2 class="section-title">需要注意的案件 · '+alertRows.length+' 件</h2><p class="muted">與期限提醒同步：今天起六個月內到期，不含已放棄、失效及撤回。</p>'+listTable(alertRows);}else if(TYPE_NAMES[pg]){body=management(pg);if(pg!=='patent')document.getElementById('topbar-actions').innerHTML=`<button class="btn-outline" onclick="openExpMo('${pg}')">匯出</button>`;}else if(pg==='alerts'){body='<p class="muted">今天起六個月內到期的有效案件 · '+upcomingRows().length+' 件（不含已放棄、失效及撤回）</p>'+listTable(upcomingRows());}else if(pg==='search'){const rows=searchRows(globalQuery);body='<p class="muted">搜尋全部資產，共 '+rows.length+' 件</p>'+listTable(rows);}else{legacyRender();return;}content.innerHTML=header+body;};
@@ -1384,7 +1401,7 @@ function chartDialog(){
   if(!d){d=document.createElement('dialog');d.id='chart-dialog';d.setAttribute('aria-labelledby','chart-dialog-title');document.body.append(d);d.addEventListener('click',e=>{if(e.target===d)d.close();});d.addEventListener('close',()=>chartReturnFocus?.focus());}
   return d;
 }
-function reportHeading(s){return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p class="muted">${esc(s.scope)}<br>依${{country:'國家／地區',status:'狀態',type:'資產類型'}[s.dimension]}比較 · ${s.total} 件 · 資料時間：${esc(s.updated)}</p>${s.note?'<p>'+esc(s.note)+'</p>':''}${s.rows.length>s.total?'<p>另有 '+(s.rows.length-s.total)+' 件未對應圖表分類；完整明細仍保留。</p>':''}`;}
+function reportHeading(s){return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p class="muted">${esc(s.scope)}<br>依${{country:'國家／地區',status:'狀態',type:'資產類型',...ANALYSIS_LABELS}[s.dimension]}比較 · ${s.total} ${ANALYSIS_KEYS[s.dimension]?'分類計次':'件'} · 資料時間：${esc(s.updated)}</p>${s.note?'<p>'+esc(s.note)+'</p>':''}${s.rows.length>s.total?'<p>另有 '+(s.rows.length-s.total)+' 件未對應圖表分類；完整明細仍保留。</p>':''}`;}
 function openChartViewer(t){
   if(!chartSnapshots[t])return;chartReturnFocus=document.activeElement;reportSnapshot=chartSnapshots[t];const d=chartDialog();
   d.innerHTML=`<button class="btn-outline dialog-close" onclick="document.getElementById('chart-dialog').close()">關閉 ×</button>${reportHeading(reportSnapshot)}<button class="btn-outline" onclick="openChartExport()">匯出這張圖</button><div class="chart-enlarged">${reportGraph(reportSnapshot)}</div>`;

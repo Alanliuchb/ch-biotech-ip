@@ -1225,7 +1225,7 @@ const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare
 let selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));
 let chartModes={trademark:'donut',patent:'donut',registration:'donut'},drill=null,globalQuery='',lastFocus=null;
 esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&(r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,selection)));}
+function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&(pg==='overview'||r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,selection)));}
 function rank(r){if(managementStatus(r)==='已完成')return 0;if(managementStatus(r)==='進行中')return 1;if(/核駁/.test(r.s))return 2;if(/結案/.test(r.s))return 3;if(/放棄|失效|撤回/.test(r.s))return 4;return 5;}
 function dateValue(r){return /^\d{4}-\d{2}-\d{2}$/.test(r.date)?Date.parse(r.date):Infinity;}
 function defaultOrder(a,b){return rank(a)-rank(b)||(dateValue(a)-dateValue(b)||0);}
@@ -1256,7 +1256,7 @@ function visibleChoices(k){
   return CHOICES[k];
 }
 function filterHTML(){
-  const keys=TYPE_NAMES[pg]?['country','status']:['country','type','status'];if(pg==='patent'||pg==='overview')keys.push(...Object.keys(ANALYSIS_KEYS));
+  const keys=TYPE_NAMES[pg]?['country','status']:['country','type','status'];if(pg==='patent')keys.push(...Object.keys(ANALYSIS_KEYS));
   return '<div class="panel hub-filters">'+keys.map(k=>{
     const vs=visibleChoices(k);
     return `<details class="hub-filter" name="hub-filter-menu"><summary onclick="closeOtherFilters(this.parentElement)">${{country:'國家／地區',type:'資產類型',status:'狀態',...ANALYSIS_LABELS}[k]} · ${vs.filter(v=>selection[k].has(v)).length}/${vs.length} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="selectGroup('${k}',true)">全選</button><button class="btn-outline" onclick="selectGroup('${k}',false)">取消全選</button>${vs.map(v=>`<label><input type="checkbox" ${selection[k].has(v)?'checked':''} onchange="changeSelection('${k}',${CHOICES[k].indexOf(v)},this.checked)">${esc(k==='type'?TYPE_NAMES[v]:v)}</label>`).join('')}</div></details>`;
@@ -1276,13 +1276,14 @@ const assetDimensions={trademark:'status',patent:'status',registration:'status'}
 let customDimension='status',analysisScope=null;
 function analysisRows(){
   if(!analysisScope)return [];
-  return HUB.filter(r=>(!ANALYSIS_KEYS[customDimension]||r.t==='patent')&&analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r))&&(r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,analysisScope))));
+  return HUB.filter(r=>analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r)));
 }
 function scopeChanged(){
-  return !analysisScope||Object.keys(CHOICES).some(k=>CHOICES[k].some(v=>selection[k].has(v)!==analysisScope[k].has(v)));
+  return !analysisScope||['country','type','status'].some(k=>CHOICES[k].some(v=>selection[k].has(v)!==analysisScope[k].has(v)));
 }
 function confirmAnalysisScope(){
   analysisScope=Object.fromEntries(Object.entries(selection).map(([k,vs])=>[k,new Set(vs)]));
+  if(ANALYSIS_KEYS[customDimension])customDimension='status';
   render();
   document.getElementById('comparison-controls')?.scrollIntoView({behavior:'smooth',block:'nearest'});
 }
@@ -1290,7 +1291,7 @@ function analysisControls(){
   const pending=HUB.filter(selected).length,dirty=scopeChanged();
   return '<h2 class="section-title">1. 選定分析資料庫範圍</h2><p class="muted">先選擇納入分析的資產、國家與狀態，再確認這批資料。</p>'+filterHTML()+
     `<div class="custom-axis"><button class="btn-outline confirm-scope" onclick="confirmAnalysisScope()">${analysisScope?'更新分析資料庫':'確認分析資料庫'}</button><span>目前選取 ${pending} 件</span><small class="muted" role="status">${analysisScope?(dirty?'範圍已修改，按「更新分析資料庫」後套用；下圖仍使用上次確認資料。':'已確認 '+analysisRows().length+' 件，可切換比較指標。'):'尚未確認資料範圍'}</small></div>`+
-    `<fieldset id="comparison-controls" class="comparison-controls" ${analysisScope?'':'disabled'}><legend>2. 選擇比較圖指標</legend><div class="custom-axis"><label>比較指標 <select aria-label="比較指標" onchange="customDimension=this.value;render()">${['country','type','status',...Object.keys(ANALYSIS_KEYS)].map(k=>`<option value="${k}" ${customDimension===k?'selected':''}>${{status:'各狀態案件比較',country:'各國家／地區案件比較',type:'各資產類型案件比較',...ANALYSIS_LABELS}[k]}</option>`).join('')}</select></label><label>圖表形式 <select aria-label="比較圖形式" onchange="chartModes.custom=this.value;render()"><option value="donut" ${chartModes.custom==='donut'?'selected':''}>甜甜圈圖（占比）</option><option value="bar" ${chartModes.custom==='bar'?'selected':''}>橫向長條圖（件數與占比）</option></select></label></div><p class="chart-note">四項專利指標僅分析範圍內的專利；商標與產品登記不納入。多值欄位拆分統計，同案可列入多項；占比以分類計次總數為分母，空白顯示未填寫。</p></fieldset>`;
+    `<fieldset id="comparison-controls" class="comparison-controls" ${analysisScope?'':'disabled'}><legend>2. 選擇比較圖指標</legend><div class="custom-axis"><label>比較指標 <select aria-label="比較指標" onchange="customDimension=this.value;render()">${['country','type','status'].map(k=>`<option value="${k}" ${customDimension===k?'selected':''}>${{status:'各狀態案件比較',country:'各國家／地區案件比較',type:'各資產類型案件比較',...ANALYSIS_LABELS}[k]}</option>`).join('')}</select></label><label>圖表形式 <select aria-label="比較圖形式" onchange="chartModes.custom=this.value;render()"><option value="donut" ${chartModes.custom==='donut'?'selected':''}>甜甜圈圖（占比）</option><option value="bar" ${chartModes.custom==='bar'?'selected':''}>橫向長條圖（件數與占比）</option></select></label></div><p class="chart-note">比較已確認範圍內的案件數與占比；可依國家、資產類型或狀態分析。</p></fieldset>`;
 }
 chartModes.custom='donut';
 function chart(t){

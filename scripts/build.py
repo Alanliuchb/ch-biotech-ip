@@ -3,7 +3,8 @@
 
 以 v2（專利、產品登記可正常運作版）為基礎，僅強化商標資料讀取。
 """
-import json, datetime, urllib.request, ssl, io, sys, os
+import argparse, json, datetime, urllib.request, ssl, io, sys, os
+from pathlib import Path
 
 GOOGLE_SERVICE_ACCOUNT_ENV = 'GOOGLE_SERVICE_ACCOUNT_JSON'
 _GOOGLE_CREDENTIALS = None
@@ -71,6 +72,39 @@ def download_excel(name, url):
     except Exception as e:
         print(f'  ERROR {name}: {e}', file=sys.stderr)
         sys.exit(1)
+
+
+def read_local_xlsx(name, path):
+    """Read a local Excel file for company-computer/offline testing."""
+    local_path = Path(path).expanduser()
+    if not local_path.is_file():
+        raise RuntimeError(
+            f'{name} 本機 Excel 不存在：{local_path}\n'
+            '請確認檔案放在 data 資料夾，或使用 --data-dir 指定資料夾。'
+        )
+    data = local_path.read_bytes()
+    if not data.startswith(b'PK\x03\x04'):
+        raise RuntimeError(f'{name} 不是有效的 .xlsx 檔案：{local_path}')
+    print(f'  OK {name} 本機檔案：{local_path} ({len(data):,} bytes)')
+    return data
+
+
+def local_file(data_dir, name, explicit=None):
+    """Resolve friendly local filenames while allowing an explicit override."""
+    if explicit:
+        return Path(explicit).expanduser()
+    candidates = {
+        '商標': ['商標進度.xlsx', '商標進度表.xlsx', 'trademark.xlsx'],
+        '專利': ['專利進度.xlsx', '專利進度表.xlsx', 'patent.xlsx'],
+        '登記': ['產品登記.xlsx', '登記進度.xlsx', '產品登記進度.xlsx', 'registration.xlsx'],
+    }[name]
+    root = Path(data_dir).expanduser()
+    for filename in candidates:
+        candidate = root / filename
+        if candidate.is_file():
+            return candidate
+    expected = '、'.join(candidates)
+    raise RuntimeError(f'{name} 找不到本機 Excel。預期檔名之一：{expected}\n資料夾：{root.resolve()}')
 
 
 def format_cell_value(value):
@@ -1378,10 +1412,34 @@ render();
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────
-print('Downloading from Google Sheets...')
-tm_data  = download_excel('商標', URLS['trademark'])
-pt_data  = download_excel('專利', URLS['patent'])
-rg_data  = download_excel('登記', URLS['registration'])
+parser = argparse.ArgumentParser(description='正瀚生技智財管理資料產生器')
+parser.add_argument(
+    '--source', choices=['google', 'local'],
+    default=os.environ.get('CH_IP_SOURCE', 'google'),
+    help='資料來源：google（預設）或 local（本機 Excel）',
+)
+parser.add_argument(
+    '--data-dir', default=os.environ.get('CH_IP_DATA_DIR', 'data'),
+    help='local 模式的 Excel 資料夾，預設為 ./data',
+)
+parser.add_argument('--trademark-file', help='local 模式指定商標 Excel 路徑')
+parser.add_argument('--patent-file', help='local 模式指定專利 Excel 路徑')
+parser.add_argument('--registration-file', help='local 模式指定產品登記 Excel 路徑')
+args = parser.parse_args()
+
+if args.source == 'local':
+    print('Reading from local Excel files...')
+    tm_path = local_file(args.data_dir, '商標', args.trademark_file)
+    pt_path = local_file(args.data_dir, '專利', args.patent_file)
+    rg_path = local_file(args.data_dir, '登記', args.registration_file)
+    tm_data = read_local_xlsx('商標', tm_path)
+    pt_data = read_local_xlsx('專利', pt_path)
+    rg_data = read_local_xlsx('登記', rg_path)
+else:
+    print('Downloading from Google Sheets...')
+    tm_data  = download_excel('商標', URLS['trademark'])
+    pt_data  = download_excel('專利', URLS['patent'])
+    rg_data  = download_excel('登記', URLS['registration'])
 
 print('Processing...')
 trademark    = process_trademark(read_trademark_rows(tm_data))

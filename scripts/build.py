@@ -22,6 +22,18 @@ SHEET_NAMES = {
 # 產品登記：已從 Excel 刪除的肥料登記欄位，不顯示在案件明細
 REG_HIDE = {'crops', 'n-p-k', 'organic matter', 'raw materials', 'others'}
 
+# 分析欄位：移除舊版 AI_ 顯示前綴，並不再輸出人工確認欄位。
+def normalize_analysis_fields(record):
+    cleaned = {}
+    for key, value in record.items():
+        key = str(key).strip()
+        if key == '人工確認':
+            continue
+        if key.startswith('AI_'):
+            key = key[3:]
+        cleaned[key] = value
+    return cleaned
+
 _TW = datetime.timezone(datetime.timedelta(hours=8))
 _NOW_TW = datetime.datetime.now(datetime.timezone.utc).astimezone(_TW)
 TODAY = _NOW_TW.date()
@@ -132,7 +144,7 @@ def read_excel_rows(data, header_row=1):
         for h, v in zip(headers, row):
             if h:
                 rec[h] = format_cell_value(v)
-        records.append(rec)
+        records.append(normalize_analysis_fields(rec))
     return records
 
 
@@ -179,7 +191,7 @@ def read_trademark_rows(data):
             if header:
                 record[header] = format_cell_value(value)
         if any(record.values()):
-            records.append(record)
+            records.append(normalize_analysis_fields(record))
 
     print(f'  商標讀取：工作表「{ws.title}」、標題列第 {header_row + 1} 列、辨識欄位 {score} 個、資料 {len(records)} 筆')
     return records
@@ -1190,11 +1202,14 @@ function zhCountry(v){v=String(v||'未填寫').trim();if(/[\u3400-\u9fff]/.test(
 function rawStatus(r,t){const keys=t==='trademark'?['狀態/進度說明','進度狀況','進度狀態']:t==='patent'?['目前狀態','狀態','進度']:['進度','狀態'];return String(keys.map(k=>r[k]).find(v=>v&&String(v).trim())||'未填寫').trim();}
 const HUB=Object.entries(RAW).flatMap(([t,rows])=>rows.map((r,i)=>({id:t+'-'+i,t,raw:r,c:zhCountry(r['國別']),s:rawStatus(r,t),name:r['商標案件']||r['商標']||r['商標名稱']||r['專利名稱(中文)']||r['登記產品名']||'未命名',date:r._end_date||'',numbers:['申請案號','申請號','註冊編號','註冊號','專利編號','證書/License ID'].map(k=>r[k]||'').join(' ')})));
 const byId=new Map(HUB.map(r=>[r.id,r]));
-const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare(b,'zh-Hant')),type:Object.keys(TYPE_NAMES),status:['已完成','進行中','需處理','已放棄']};
+const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
+const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
+function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]||'未填寫').trim()||'未填寫';}
+const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare(b,'zh-Hant')),type:Object.keys(TYPE_NAMES),status:['已完成','進行中','需處理','已放棄'],...Object.fromEntries(Object.keys(ANALYSIS_KEYS).map(k=>[k,[...new Set(HUB.map(r=>analysisValue(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'))]))};
 let selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));
 let chartModes={trademark:'donut',patent:'donut',registration:'donut'},drill=null,globalQuery='',lastFocus=null;
 esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r));}
+function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&Object.keys(ANALYSIS_KEYS).every(k=>selection[k].has(analysisValue(r,k)));}
 function rank(r){if(managementStatus(r)==='已完成')return 0;if(managementStatus(r)==='進行中')return 1;if(/核駁/.test(r.s))return 2;if(/結案/.test(r.s))return 3;if(/放棄|失效|撤回/.test(r.s))return 4;return 5;}
 function dateValue(r){return /^\d{4}-\d{2}-\d{2}$/.test(r.date)?Date.parse(r.date):Infinity;}
 function defaultOrder(a,b){return rank(a)-rank(b)||(dateValue(a)-dateValue(b)||0);}
@@ -1220,16 +1235,19 @@ function patentStatus(r){
 function chartStatus(r){return r.t==='patent'?patentStatus(r):r.s;}
 function visibleChoices(k){
   if(TYPE_NAMES[pg]&&k==='country')return CHOICES.country.filter(v=>HUB.some(r=>r.t===pg&&r.c===v));
+  if(TYPE_NAMES[pg]&&k!=='country'&&k!=='type'&&k!=='status')return CHOICES[k].filter(v=>HUB.some(r=>r.t===pg&&analysisValue(r,k)===v));
   return CHOICES[k];
 }
 function filterHTML(){
-  const keys=TYPE_NAMES[pg]?['country','status']:['country','type','status'];
+  const keys=TYPE_NAMES[pg]?['country','status','platform','substance','patentType','crop']:['country','type','status','platform','substance','patentType','crop'];
   return '<div class="panel hub-filters">'+keys.map(k=>{
     const vs=visibleChoices(k);
     return `<details class="hub-filter" name="hub-filter-menu"><summary onclick="closeOtherFilters(this.parentElement)">${{country:'國家／地區',type:'資產類型',status:'狀態'}[k]} · ${vs.filter(v=>selection[k].has(v)).length}/${vs.length} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="selectGroup('${k}',true)">全選</button><button class="btn-outline" onclick="selectGroup('${k}',false)">取消全選</button>${vs.map(v=>`<label><input type="checkbox" ${selection[k].has(v)?'checked':''} onchange="changeSelection('${k}',${CHOICES[k].indexOf(v)},this.checked)">${esc(k==='type'?TYPE_NAMES[v]:v)}</label>`).join('')}</div></details>`;
   }).join('')+'<button class="btn-outline" onclick="resetHub()">重設全部</button></div>';
 }
 function changeSelection(k,i,on){on?selection[k].add(CHOICES[k][i]):selection[k].delete(CHOICES[k][i]);cur=1;refreshHub();}
+const baseFilterHTML=filterHTML;
+filterHTML=function(){let html=baseFilterHTML();['技術平台','技術物質','專利類型','對象作物'].forEach(label=>{html=html.replace('undefined ·',label+' ·');});return html;};
 function selectGroup(k,on){visibleChoices(k).forEach(v=>on?selection[k].add(v):selection[k].delete(v));cur=1;refreshHub();}
 function resetHub(){selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));drill=null;render();}
 function closeOtherFilters(current){document.querySelectorAll('.hub-filter[open]').forEach(menu=>{if(menu!==current)menu.open=false;});}
@@ -1241,7 +1259,7 @@ const assetDimensions={trademark:'status',patent:'status',registration:'status'}
 let customDimension='status',analysisScope=null;
 function analysisRows(){
   if(!analysisScope)return [];
-  return HUB.filter(r=>analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r)));
+  return HUB.filter(r=>analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r))&&Object.keys(ANALYSIS_KEYS).every(k=>analysisScope[k].has(analysisValue(r,k))));
 }
 function scopeChanged(){
   return !analysisScope||Object.keys(CHOICES).some(k=>CHOICES[k].some(v=>selection[k].has(v)!==analysisScope[k].has(v)));

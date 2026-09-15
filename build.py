@@ -290,7 +290,7 @@ def process_trademark(records):
 
 def process_patent(records):
     for r in records:
-        for field in ('技術平台', '技術物質', '專利類型', '對象作物'):
+        for field in ('技術平台', '技術物質', '專利類型', '對象作物', '對應逆境/功效'):
             source = 'AI_' + field if 'AI_' + field in r else field
             r[field] = format_cell_value(r.get(source, ''))
         r['_status'] = patent_status(r.get('目前狀態', ''))
@@ -1205,8 +1205,8 @@ function zhCountry(v){v=String(v||'未填寫').trim();if(/[\u3400-\u9fff]/.test(
 function rawStatus(r,t){const keys=t==='trademark'?['狀態/進度說明','進度狀況','進度狀態']:t==='patent'?['目前狀態','狀態','進度']:['進度','狀態'];return String(keys.map(k=>r[k]).find(v=>v&&String(v).trim())||'未填寫').trim();}
 const HUB=Object.entries(RAW).flatMap(([t,rows])=>rows.map((r,i)=>({id:t+'-'+i,t,raw:r,c:zhCountry(r['國別']),s:rawStatus(r,t),name:r['商標案件']||r['商標']||r['商標名稱']||r['專利名稱(中文)']||r['登記產品名']||'未命名',date:r._end_date||'',numbers:['申請案號','申請號','註冊編號','註冊號','專利編號','證書/License ID'].map(k=>r[k]||'').join(' ')})));
 const byId=new Map(HUB.map(r=>[r.id,r]));
-const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
-const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
+const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
+const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
 function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]??r.raw['AI_'+ANALYSIS_KEYS[k]]??'未填寫').trim()||'未填寫';}
 // Split explicit list separators outside parentheses; retain chemical names and translations.
 function analysisValues(r,k){

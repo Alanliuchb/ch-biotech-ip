@@ -278,7 +278,7 @@ async function unlockApp(e) {
   }
 }
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const REG_HIDE = new Set(["others", "raw materials", "n-p-k", "crops", "organic matter"]);
+const REG_HIDE = new Set(["crops", "organic matter", "n-p-k", "others", "raw materials"]);
 const NOW_STR = '2026/09/14 16:02';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
@@ -764,7 +764,7 @@ function doMode1Export(fmt) {
   const csv = '﻿' + [cols.join(','),
     ...rows.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
   ].join('\n');
-  dlCSV(csv, prefix+'_2026/09/14'.replace(/[/]/g,'') + '.csv');
+  dlCSV(csv, prefix+'_2026/09/15'.replace(/[/]/g,'') + '.csv');
 }
 
 function doMode2Preview() {
@@ -776,7 +776,7 @@ function doMode2Export(fmt) {
     const tbl=buildTrademarkSummary(), cols=['國別','已取證','申請中','放棄案','合計'];
     if(fmt==='pdf'){exportPDF('商標狀態／國別彙總',cols,tbl.exportRows);return;}
     const csv='﻿'+[cols.map(csvCell).join(','),...tbl.exportRows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\n');
-    dlCSV(csv,'正瀚_商標狀態彙總_2026/09/14'.replace(/[/]/g,'')+'.csv');
+    dlCSV(csv,'正瀚_商標狀態彙總_2026/09/15'.replace(/[/]/g,'')+'.csv');
     return;
   }
   const tbl = buildMode2Table();
@@ -803,7 +803,7 @@ function doMode2Export(fmt) {
   rows.push(totalRow);
   if(fmt==='pdf'){const pdfRows=rows.map(row=>Object.fromEntries(header.map((h,i)=>[h,row[i]])));exportPDF('產品登記各國類別彙總',header,pdfRows);return;}
   const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
-  dlCSV(csv, '正瀚_產品登記彙總_2026/09/14'.replace(/[/]/g,'') + '.csv');
+  dlCSV(csv, '正瀚_產品登記彙總_2026/09/15'.replace(/[/]/g,'') + '.csv');
 }
 
 function buildTrademarkSummary() {
@@ -867,8 +867,8 @@ function zhCountry(v){v=String(v||'未填寫').trim();if(/[\u3400-\u9fff]/.test(
 function rawStatus(r,t){const keys=t==='trademark'?['狀態/進度說明','進度狀況','進度狀態']:t==='patent'?['目前狀態','狀態','進度']:['進度','狀態'];return String(keys.map(k=>r[k]).find(v=>v&&String(v).trim())||'未填寫').trim();}
 const HUB=Object.entries(RAW).flatMap(([t,rows])=>rows.map((r,i)=>({id:t+'-'+i,t,raw:r,c:zhCountry(r['國別']),s:rawStatus(r,t),name:r['商標案件']||r['商標']||r['商標名稱']||r['專利名稱(中文)']||r['登記產品名']||'未命名',date:r._end_date||'',numbers:['申請案號','申請號','註冊編號','註冊號','專利編號','證書/License ID'].map(k=>r[k]||'').join(' ')})));
 const byId=new Map(HUB.map(r=>[r.id,r]));
-const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
-const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物'};
+const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
+const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
 function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]??r.raw['AI_'+ANALYSIS_KEYS[k]]??'未填寫').trim()||'未填寫';}
 // Split explicit list separators outside parentheses; retain chemical names and translations.
 function analysisValues(r,k){

@@ -1,1 +1,1688 @@
+#!/usr/bin/env python3
+"""正瀚生技 智財與登記管理 v3 - 自動更新腳本
 
+以 v2（專利、產品登記可正常運作版）為基礎，僅強化商標資料讀取。
+"""
+import argparse, json, datetime, urllib.request, ssl, io, sys, os
+from pathlib import Path
+
+GOOGLE_SERVICE_ACCOUNT_ENV = 'GOOGLE_SERVICE_ACCOUNT_JSON'
+_GOOGLE_CREDENTIALS = None
+
+URLS = {
+    'trademark':    'https://docs.google.com/spreadsheets/d/13iX5d_tig149MicN-WvTENS_kTiQjkNb/export?format=xlsx',
+    'patent':       'https://docs.google.com/spreadsheets/d/1Uj_PV344NkDiY2n8YCs_HyjpnQYn87Ca/export?format=xlsx',
+    'registration': 'https://docs.google.com/spreadsheets/d/1llnfbjcPST6Wa0p6psIxUfnjlGicZEi9/export?format=xlsx',
+}
+SHEET_NAMES = {
+    'trademark':    '商標進度管理表',
+    'patent':       '專利進度管理表',
+    'registration': '產品登記管理表',
+}
+# 產品登記：已從 Excel 刪除的肥料登記欄位，不顯示在案件明細
+REG_HIDE = {'crops', 'n-p-k', 'organic matter', 'raw materials', 'others'}
+
+# 分析欄位：移除舊版 AI_ 顯示前綴，並不再輸出人工確認欄位。
+def normalize_analysis_fields(record):
+    cleaned = {}
+    for key, value in record.items():
+        key = str(key).strip()
+        if key == '人工確認':
+            continue
+        if key.startswith('AI_'):
+            key = key[3:]
+        cleaned[key] = value
+    return cleaned
+
+_TW = datetime.timezone(datetime.timedelta(hours=8))
+_NOW_TW = datetime.datetime.now(datetime.timezone.utc).astimezone(_TW)
+TODAY = _NOW_TW.date()
+TODAY_STR = TODAY.strftime('%Y/%m/%d')
+NOW_STR = _NOW_TW.strftime('%Y/%m/%d %H:%M')
+
+
+def download_excel(name, url):
+    global _GOOGLE_CREDENTIALS
+    ctx = ssl.create_default_context()
+    service_account_json = os.environ.get(GOOGLE_SERVICE_ACCOUNT_ENV, '').strip()
+    if not service_account_json:
+        raise RuntimeError(
+            f'找不到 GitHub Secret：{GOOGLE_SERVICE_ACCOUNT_ENV}。'
+            '請確認已在 GitHub Repository 的 Actions Secrets 建立。'
+        )
+    try:
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        from google.oauth2.service_account import Credentials
+        if _GOOGLE_CREDENTIALS is None:
+            info = json.loads(service_account_json)
+            _GOOGLE_CREDENTIALS = Credentials.from_service_account_info(
+                info,
+                scopes=['https://www.googleapis.com/auth/drive.readonly']
+            )
+        if not _GOOGLE_CREDENTIALS.valid:
+            _GOOGLE_CREDENTIALS.refresh(GoogleAuthRequest())
+    except Exception as e:
+        raise RuntimeError(f'Google Service Account 驗證失敗：{e}') from e
+
+    # 使用 OAuth Bearer Token 讀取私人 Google Sheets，不依賴公開分享連結。
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'CH-Biotech-IP-Updater/4.0',
+        'Authorization': f'Bearer {_GOOGLE_CREDENTIALS.token}',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',
+    })
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as r:
+            data = r.read()
+            content_type = (r.headers.get('Content-Type') or '').lower()
+        if not data.startswith(b'PK\x03\x04'):
+            preview = data[:200].decode('utf-8', errors='replace').replace('\n', ' ')
+            raise RuntimeError(f'{name} 下載結果不是 XLSX（Content-Type: {content_type}；回應開頭: {preview}）')
+        print(f'  OK {name}: {len(data):,} bytes')
+        return data
+    except Exception as e:
+        print(f'  ERROR {name}: {e}', file=sys.stderr)
+        sys.exit(1)
+
+
+def read_local_xlsx(name, path):
+    """Read a local Excel file for company-computer/offline testing."""
+    local_path = Path(path).expanduser()
+    if not local_path.is_file():
+        raise RuntimeError(
+            f'{name} 本機 Excel 不存在：{local_path}\n'
+            '請確認檔案放在 data 資料夾，或使用 --data-dir 指定資料夾。'
+        )
+    data = local_path.read_bytes()
+    if not data.startswith(b'PK\x03\x04'):
+        raise RuntimeError(f'{name} 不是有效的 .xlsx 檔案：{local_path}')
+    print(f'  OK {name} 本機檔案：{local_path} ({len(data):,} bytes)')
+    return data
+
+
+def local_file(data_dir, name, explicit=None):
+    """Resolve friendly local filenames while allowing an explicit override."""
+    if explicit:
+        return Path(explicit).expanduser()
+    candidates = {
+        '商標': ['商標進度.xlsx', '商標進度表.xlsx', 'trademark.xlsx'],
+        '專利': ['專利進度.xlsx', '專利進度表.xlsx', 'patent.xlsx'],
+        '登記': ['產品登記.xlsx', '登記進度.xlsx', '產品登記進度.xlsx', 'registration.xlsx'],
+    }[name]
+    root = Path(data_dir).expanduser()
+    for filename in candidates:
+        candidate = root / filename
+        if candidate.is_file():
+            return candidate
+    expected = '、'.join(candidates)
+    raise RuntimeError(f'{name} 找不到本機 Excel。預期檔名之一：{expected}\n資料夾：{root.resolve()}')
+
+
+def format_cell_value(value):
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip() if value is not None else ''
+    return '' if text.startswith('#') else text
+
+
+def read_excel_rows(data, header_row=1):
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    ws = wb.active
+    all_rows = list(ws.iter_rows(values_only=True))
+    if len(all_rows) < header_row + 1:
+        return []
+    headers = [str(h).strip() if h is not None else '' for h in all_rows[header_row]]
+    records = []
+    for row in all_rows[header_row + 1:]:
+        if all(v is None for v in row):
+            continue
+        rec = {}
+        for h, v in zip(headers, row):
+            if h:
+                rec[h] = format_cell_value(v)
+        records.append(normalize_analysis_fields(rec))
+    return records
+
+
+def read_trademark_rows(data):
+    """讀取商標表：自動辨識工作表與標題列，避免資料列位置改變後讀空。"""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    expected = {
+        '商標', '商標案件', '商標名稱', '國別', '申請號', '申請案號',
+        '進度狀況', '進度狀態', '狀態/進度說明', '商標分類', '申請日期',
+        '使用期間', '使用期間-到期', '使用期間-到期日', '使用期間_到期日',
+        '註冊編號', '註冊號', '證書號 (進度)', '證書號(進度)',
+    }
+
+    # 優先使用指定工作表；若匯出檔不存在該名稱，退回逐張表搜尋。
+    sheets = []
+    preferred = SHEET_NAMES.get('trademark')
+    if preferred and preferred in wb.sheetnames:
+        sheets.append(wb[preferred])
+    sheets.extend(ws for ws in wb.worksheets if ws not in sheets)
+
+    best = None
+    for ws in sheets:
+        rows = list(ws.iter_rows(values_only=True))
+        for header_row, row in enumerate(rows[:8]):
+            values = {str(v).strip() for v in row if v is not None}
+            score = len(values & expected)
+            if score >= 2 and (best is None or score > best[0]):
+                best = (score, ws, header_row, rows)
+
+    if best is None:
+        print('  WARNING 商標：找不到明確標題列，退回第一張工作表第 1 列', file=sys.stderr)
+        return read_excel_rows(data, header_row=0)
+
+    score, ws, header_row, rows = best
+    headers = [str(h).strip() if h is not None else '' for h in rows[header_row]]
+    records = []
+    for row in rows[header_row + 1:]:
+        if all(v is None for v in row):
+            continue
+        record = {}
+        for header, value in zip(headers, row):
+            if header:
+                record[header] = format_cell_value(value)
+        if any(record.values()):
+            records.append(normalize_analysis_fields(record))
+
+    print(f'  商標讀取：工作表「{ws.title}」、標題列第 {header_row + 1} 列、辨識欄位 {score} 個、資料 {len(records)} 筆')
+    return records
+
+
+def calc_tm_deadline(date_str):
+    """商標：到期前 6 個月顯示警示"""
+    v = (date_str or '').strip()
+    if not v:
+        return '', '待補期限'
+    if v.upper() == 'N/A':
+        return 'N/A', 'N/A'
+    s = v.replace('/', '-').split(' ')[0]
+    try:
+        d = datetime.date.fromisoformat(s)
+        delta = (d - TODAY).days
+        ds = d.strftime('%Y-%m-%d')
+        if delta < 0:      return ds, '期限已過'
+        elif delta <= 180: return ds, '即將到期'
+        else:              return ds, '正常'
+    except Exception:
+        return v, '日期異常'
+
+
+def calc_deadline(date_str):
+    """一般期限計算（多門檻）"""
+    v = (date_str or '').strip()
+    if not v:
+        return '', '待補期限'
+    if v.upper() == 'N/A':
+        return 'N/A', 'N/A'
+    s = v.replace('/', '-').split(' ')[0]
+    try:
+        d = datetime.date.fromisoformat(s)
+        delta = (d - TODAY).days
+        ds = d.strftime('%Y-%m-%d')
+        if delta < 0:      return ds, '期限已過'
+        elif delta <= 30:  return ds, '即將到期(30天)'
+        elif delta <= 90:  return ds, '即將到期(90天)'
+        elif delta <= 180: return ds, '即將到期(180天)'
+        elif delta <= 365: return ds, '即將到期(365天)'
+        else:              return ds, '正常'
+    except Exception:
+        return v, '日期異常'
+
+
+def trademark_status(r):
+    """4 分類：註冊案 / 申請案 / 核駁案 / 放棄案"""
+    st = (r.get('進度狀況') or r.get('進度狀態') or '').strip()
+    if st in ('已取證', '已取得', '註冊案'):
+        return '註冊案'
+    if st in ('申請案', '核駁案', '放棄案'):
+        return st
+    cert = (r.get('證書號 (進度)') or r.get('證書號(進度)') or r.get('註冊號') or '').strip()
+    if not cert:
+        return '申請案'
+    if any(k in cert for k in ('放棄', '失效')):
+        return '放棄案'
+    if '核駁' in cert:
+        return '核駁案'
+    if cert.startswith('【') or '訴願' in cert or '申復' in cert:
+        return '申請案'
+    return '註冊案'
+
+
+def patent_status(state):
+    v = state.strip().replace('\n', '')
+    if v.startswith('專利通過') or v.startswith('領證'):
+        return '已取得'
+    if any(k in v for k in ('放棄', '撤回', '失效', '結案')):
+        return '已結案'
+    return '申請中'
+
+
+def process_trademark(records):
+    for r in records:
+        r['_status'] = trademark_status(r)
+        # 到期日：優先用新分欄，備用舊合併欄
+        end_raw = (r.get('使用期間-到期') or r.get('使用期間-到期日') or r.get('使用期間_到期日') or '').strip()
+        if not end_raw:
+            period = (r.get('使用期間') or '').strip()
+            if period and '-' in period:
+                end_raw = period.split('-')[-1].strip()
+        end_date, dl = calc_tm_deadline(end_raw)
+        r['_end_date'] = end_date
+        r['_deadline_status'] = dl
+        # 起始日
+        start_raw = (r.get('使用期間-起始') or r.get('使用期間-起始日') or r.get('使用期間_起始日') or '').strip()
+        if not start_raw:
+            period = (r.get('使用期間') or '').strip()
+            if period and '-' in period:
+                start_raw = period.split('-')[0].strip()
+        r['_start_date'] = start_raw
+    return records
+
+
+def process_patent(records):
+    for r in records:
+        for field in ('技術平台', '技術物質', '專利類型', '對象作物', '對應逆境/功效'):
+            source = 'AI_' + field if 'AI_' + field in r else field
+            r[field] = format_cell_value(r.get(source, ''))
+        r['_status'] = patent_status(r.get('目前狀態', ''))
+        end_raw = (r.get('證書到期日') or '').strip()
+        end_date, dl = calc_deadline(end_raw)
+        r['_end_date'] = end_date
+        r['_deadline_status'] = dl
+    return records
+
+
+def read_registration_rows(data):
+    """Read named registration sheets; link rates without inflating product counts."""
+    import openpyxl, re
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    names = {n.strip(): n for n in wb.sheetnames}
+    if not ({'Fert', 'PGR Tech', 'PGR Rate Detail'} & names.keys()):
+        return read_excel_rows(data)  # Original workbook remains supported.
+    missing = {'Fert', 'PGR Tech', 'PGR Rate Detail'} - names.keys()
+    if missing:
+        raise ValueError('產品登記缺少工作表：' + '、'.join(sorted(missing)))
+
+    def rows(name, required):
+        values = list(wb[names[name]].values)
+        headers = [format_cell_value(v) for v in values[0]] if values else []
+        if not set(required) <= set(headers):
+            raise ValueError(name + ' 第一列缺少欄位：' + '、'.join(sorted(set(required)-set(headers))))
+        return [{h: format_cell_value(v) for h, v in zip(headers, row) if h}
+                for row in values[1:] if any(v is not None and str(v).strip() for v in row)]
+
+    rates = rows('PGR Rate Detail', ['Rate Detail ID', 'EPA Reg. No.', 'Product'])
+    rate_map = {}
+    for rate in rates:
+        rid = rate['Rate Detail ID']
+        if not rid or rid in rate_map:
+            raise ValueError('用量明細 ID 空白或重複：' + rid)
+        rate_map[rid] = rate
+    result, used = [], set()
+    for sheet, group in [('Fert', 'fert'), ('PGR Tech', 'pgr')]:
+        records = rows(sheet, ['國別', '登記產品名', '登記類別', '證書/License ID'])
+        for index, record in enumerate(records):
+            record['_reg_group'] = group
+            record['_record_id'] = f'{group}-{index+1}'
+            record['_rates'] = []
+            if group == 'pgr':
+                for rid in filter(None, re.split(r'[;；\n]+', record.get('Rate Detail ID', ''))):
+                    rid = rid.strip()
+                    if not rid:
+                        continue
+                    if rid not in rate_map:
+                        raise ValueError('找不到 PGR 用量明細：' + rid)
+                    detail = rate_map[rid]
+                    if detail['EPA Reg. No.'] != record['證書/License ID']:
+                        raise ValueError('用量明細證號與主表不符：' + rid)
+                    if rid in used:
+                        raise ValueError('用量明細重複連結：' + rid)
+                    used.add(rid)
+                    record['_rates'].append(dict(detail))
+            else:
+                # Keep method + dilution on the same row; never infer a method from a dose.
+                for n, line in enumerate(record.get('Recommended Rate', '').splitlines()):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = re.split(r'[:：]', line, maxsplit=1)
+                    method, value = (parts[0].strip(), parts[1].strip()) if len(parts)==2 else ('', line)
+                    match = re.search(r'(?<![\d/])([\d,]+(?:\s*[~～–-]\s*[\d,]+)?)\s*[xX倍]', value)
+                    dilution = re.sub(r'\s+', '', match.group(1)).replace(',', '') if match else ''
+                    dilution = re.sub(r'[～–-]', '~', dilution)
+                    record['_rates'].append({
+                        'Rate Detail ID': f'FERT-{index+1}-{n+1}', 'Product': record['登記產品名'],
+                        'Crop / Crop Group': record.get('Crops', ''), 'Application Method': method,
+                        'Application Timing': '', 'Rate Value / Range': value, 'Rate Unit': '',
+                        'Dilution / Concentration': dilution + '倍' if dilution else value,
+                        'Frequency / Interval': '', 'PHI / Restrictions': '',
+                        'Source / Notes': 'Recommended Rate：' + line, '_dilution': dilution})
+            result.append(record)
+        print(f'  {sheet}: {len(records)} 筆產品紀錄')
+    orphan = set(rate_map) - used
+    if orphan:
+        raise ValueError('PGR 用量明細未連結主表：' + '、'.join(sorted(orphan)))
+    print(f'  PGR Rate Detail: {len(rates)} 筆（不計入產品數）')
+    return result
+
+
+def process_registration(records):
+    sm = {'維持證書': '已取得', '已取得': '已取得',
+          '登記中': '辦理中', '辦理中': '辦理中', '申請中': '辦理中'}
+    for r in records:
+        raw = r.get('進度', '')
+        r['_status'] = sm.get(raw, raw or '辦理中')
+        exp = (r.get('證書有效期限') or '').strip()
+        end_date, dl = calc_deadline(exp)
+        r['_end_date'] = end_date
+        r['_deadline_status'] = dl
+    return records
+
+
+# ─── HTML ────────────────────────────────────────────────────────────────────
+
+def build_html(trademark, patent, registration):
+    data = {'trademark': trademark, 'patent': patent, 'registration': registration}
+    data_js = json.dumps(data, ensure_ascii=False).replace('</', '<' + chr(92) + '/')
+    tm_c = len(trademark)
+    pt_c = len(patent)
+    rg_c = len(registration)
+    reg_hide_js = json.dumps(list(REG_HIDE))
+
+    css = r'''
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;background:#f0f2f5;color:#1a1a2e;display:flex;height:100vh;overflow:hidden}
+#sidebar{width:220px;min-width:220px;background:#0f1629;color:#c8d0e0;display:flex;flex-direction:column;height:100vh;overflow-y:auto;flex-shrink:0}
+#main{min-width:0}
+.brand{padding:24px 20px 16px;border-bottom:1px solid #1e2a4a}
+.brand-logo{font-size:22px;font-weight:800;color:#fff;letter-spacing:2px}
+.brand-sub{font-size:10px;color:#6b7a99;margin-top:3px;letter-spacing:1px}
+.brand-title{font-size:12px;color:#8899bb;margin-top:10px;line-height:1.4}
+.nav{padding:16px 0;flex:1}
+.nav-section{padding:6px 20px 4px;font-size:10px;color:#4a5568;letter-spacing:1.5px;text-transform:uppercase;font-weight:600}
+.nav-item{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;cursor:pointer;border-left:3px solid transparent;transition:all .15s;font-size:13.5px;color:#9aabbf}
+.nav-item:hover{background:#1a2540;color:#e0e8f5;border-left-color:#3b5bdb}
+.nav-item.active{background:#1a2a50;color:#fff;border-left-color:#4c6ef5;font-weight:500}
+.nav-badge{font-size:11px;background:#1e3060;color:#7c9be8;padding:2px 7px;border-radius:10px;font-weight:600}
+.nav-badge.alert{background:#3d1515;color:#f87171}
+.sidebar-footer{padding:16px 20px;border-top:1px solid #1e2a4a;font-size:11px;color:#4a5568;line-height:1.5}
+#main{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column}
+.topbar{background:#fff;border-bottom:1px solid #e0e6ef;padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;box-shadow:0 1px 4px rgba(0,0,0,.05)}
+.topbar-left{font-size:13px;color:#6b7a99}
+.topbar-left span{color:#1a1a2e;font-weight:500}
+.btn-outline{padding:7px 16px;border-radius:6px;border:1px solid #d0d7e3;background:#fff;color:#4a5568;cursor:pointer;font-size:13px;font-weight:500}
+.btn-outline:hover{background:#f5f7fb;border-color:#4c6ef5;color:#4c6ef5}
+.btn-primary{padding:7px 16px;border-radius:6px;border:none;background:#4c6ef5;color:#fff;cursor:pointer;font-size:13px;font-weight:500}
+.btn-primary:hover{background:#3b5bdb}
+.content{padding:28px;flex:1}
+.ov-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+.card{background:#fff;border-radius:10px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,.06);border:1px solid #e8edf5}
+.card-label{font-size:11px;color:#8899bb;font-weight:600;letter-spacing:.5px;margin-bottom:6px}
+.card-value{font-size:26px;font-weight:700;color:#1a1a2e;line-height:1}
+.card-sub{font-size:12px;color:#8899bb;margin-top:6px}
+.card.ac{border-color:#fca5a5;background:#fff8f8}.card.ac .card-label{color:#dc2626}.card.ac .card-value{color:#dc2626}
+.card.wc{border-color:#fcd34d;background:#fffdf0}.card.wc .card-label{color:#b45309}.card.wc .card-value{color:#b45309}
+.section-title{font-size:15px;font-weight:600;color:#1a1a2e;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.section-title::after{content:"";flex:1;height:1px;background:#e0e6ef}
+.sync-bar{background:#eff3ff;border:1px solid #c5d2f6;border-radius:8px;padding:9px 14px;font-size:12px;color:#4c6ef5;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+.fbar{background:#fff;border-radius:10px;border:1px solid #e8edf5;padding:12px 16px;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.fbar input,.fbar select{padding:7px 10px;border:1px solid #d0d7e3;border-radius:6px;font-size:13px;color:#1a1a2e;background:#fff;outline:none}
+.fbar input:focus,.fbar select:focus{border-color:#4c6ef5}
+.fbar input{width:190px}
+.frs{font-size:12px;color:#4c6ef5;cursor:pointer;padding:4px 8px;border-radius:4px}
+.frs:hover{background:#eff3ff}
+.rcount{font-size:12px;color:#8899bb;margin-left:auto}
+.twrap{background:#fff;border-radius:10px;border:1px solid #e8edf5;overflow-x:auto;overflow-y:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);margin-bottom:20px;-webkit-overflow-scrolling:touch}
+table{width:100%;min-width:880px;border-collapse:collapse;font-size:13px}
+thead th{background:#f7f9fd;padding:10px 13px;text-align:left;font-size:11px;font-weight:600;color:#6b7a99;letter-spacing:.5px;border-bottom:1px solid #e0e6ef;white-space:nowrap;cursor:pointer;user-select:none}
+thead th:hover{color:#4c6ef5}
+tbody tr{border-bottom:1px solid #f4f6fb;transition:background .1s;cursor:pointer}
+tbody tr:hover{background:#f7f9fd}
+tbody tr:last-child{border-bottom:none}
+td{padding:9px 13px;vertical-align:middle;white-space:nowrap}
+.twrap .tm-name{white-space:normal}
+.cn{font-weight:500;color:#1a1a2e;max-width:none;overflow:visible;text-overflow:clip;white-space:normal;word-break:break-word}
+.tm-name{font-weight:500;color:#1a1a2e;white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word;line-height:1.35}
+.cs{font-size:11px;color:#8899bb;margin-top:2px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11.5px;font-weight:500;white-space:nowrap}
+.b-註冊案{background:#dcfce7;color:#166534}
+.b-申請案{background:#dbeafe;color:#1d4ed8}
+.b-審查中{background:#dbeafe;color:#1d4ed8}
+.b-核駁案{background:#fff7ed;color:#c2410c}
+.b-放棄案{background:#f3f4f6;color:#6b7280}
+.b-已取得{background:#dcfce7;color:#166534}
+.b-申請中{background:#dbeafe;color:#1d4ed8}
+.b-已結案{background:#f3f4f6;color:#6b7280}
+.b-辦理中{background:#dbeafe;color:#1d4ed8}
+.b-T{background:#f0f4ff;color:#3b5bdb}
+.dl-正常{background:#f0fdf4;color:#16a34a}
+.dl-即將到期{background:#fff7ed;color:#c2410c;font-weight:600}
+.dl-期限已過{background:#fef2f2;color:#dc2626;font-weight:600}
+.dl-30{background:#fef2f2;color:#dc2626}
+.dl-90{background:#fff7ed;color:#c2410c}
+.dl-180{background:#fff7ed;color:#d97706}
+.dl-365{background:#fefce8;color:#a16207}
+.dl-待補期限{background:#f3f4f6;color:#9ca3af}
+.dl-日期異常{background:#fdf4ff;color:#7c3aed}
+.dl-NA{background:#f3f4f6;color:#9ca3af}
+.pgbar{display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:12px 16px;border-top:1px solid #f0f4fa}
+.pgb{width:30px;height:30px;border-radius:6px;border:1px solid #d0d7e3;background:#fff;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.pgb:hover:not([disabled]){background:#eff3ff;border-color:#4c6ef5;color:#4c6ef5}
+.pgb.apg{background:#4c6ef5;color:#fff;border-color:#4c6ef5}
+.pgb[disabled]{opacity:.4;cursor:not-allowed}
+.pgi{font-size:12px;color:#8899bb;margin:0 4px}
+.plist{background:#fff;border-radius:10px;border:1px solid #e8edf5;overflow-x:auto;overflow-y:hidden;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);-webkit-overflow-scrolling:touch}
+.pr{display:grid;grid-template-columns:minmax(260px,1fr) 140px 130px 150px;min-width:680px;border-bottom:1px solid #f0f4fa;font-size:13px;cursor:pointer;transition:background .1s}
+.pr:hover:not(.prh){background:#f7f9fd}.pr:last-child{border-bottom:none}
+.prh{background:#f7f9fd;font-size:11px;font-weight:600;color:#6b7a99;cursor:default}
+.pr>div{padding:10px 14px}
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
+.mo.open{opacity:1;pointer-events:auto}
+.modal{background:#fff;border-radius:12px;width:700px;max-width:95vw;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.mh{padding:16px 22px;border-bottom:1px solid #e8edf5;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#fff;z-index:1}
+.mh h3{font-size:15px;font-weight:600}
+.mclose{width:28px;height:28px;border:none;background:none;cursor:pointer;font-size:17px;color:#6b7a99;border-radius:6px}
+.mclose:hover{background:#f3f4f6}
+.mbody{padding:18px 22px}
+.dg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.di label{font-size:11px;color:#8899bb;font-weight:600;display:block;margin-bottom:2px}
+.di .dv{font-size:13px;color:#1a1a2e}
+.di.full{grid-column:1/-1}
+.lock-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f3f6fb;padding:20px}
+.lock-card{width:min(390px,100%);background:#fff;border:1px solid #e5eaf2;border-radius:14px;padding:30px;box-shadow:0 8px 30px rgba(24,43,77,.10);text-align:center}
+.lock-logo{font-size:28px;font-weight:800;letter-spacing:2px;color:#17213a;margin-bottom:4px}
+.lock-sub{font-size:13px;color:#6b7a99;margin-bottom:24px}
+.lock-card input{width:100%;box-sizing:border-box;border:1px solid #cfd8e8;border-radius:8px;padding:11px 12px;font-size:14px;outline:none;margin-bottom:10px}
+.lock-card input:focus{border-color:#4263eb;box-shadow:0 0 0 3px rgba(66,99,235,.12)}
+.lock-card button{width:100%;border:0;border-radius:8px;padding:11px;background:#315bdc;color:#fff;font-size:14px;cursor:pointer}
+.lock-error{height:18px;color:#d9485f;font-size:12px;margin-top:10px}
+body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
+@media (max-width:900px){
+  body{display:block;height:auto;min-height:100vh;overflow:auto}
+  #sidebar{width:100%;min-width:0;height:auto;overflow:visible;position:relative}
+  .brand{padding:14px 18px 10px;display:flex;align-items:center;gap:10px}
+  .brand-logo{font-size:20px}.brand-sub{margin-top:2px}.brand-title{margin:0 0 0 4px}
+  .nav{padding:6px 8px;display:flex;align-items:center;gap:4px;overflow-x:auto;flex:none}
+  .nav-section{display:none}
+  .nav-item{flex:0 0 auto;padding:9px 11px;border-left:0;border-bottom:3px solid transparent;font-size:12px;white-space:nowrap}
+  .nav-item:hover,.nav-item.active{border-left-color:transparent;border-bottom-color:#4c6ef5}
+  .sidebar-footer{display:none}
+  #main{min-height:calc(100vh - 92px);overflow:visible}
+  .content{padding:20px}
+  .twrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .twrap table{min-width:720px}
+  .plist{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .pr{min-width:560px}
+}
+@media (max-width:600px){
+  .brand{padding:12px 14px 9px}.brand-title{font-size:11px}
+  .nav{padding:5px 6px}.nav-item{padding:8px 9px;font-size:11.5px}.nav-badge{font-size:10px;padding:1px 5px;margin-left:5px}
+  .topbar{padding:11px 14px}.topbar-left{font-size:12px}.btn-outline,.btn-primary{padding:7px 11px;font-size:12px}
+  .content{padding:12px}.ov-grid{grid-template-columns:1fr;gap:10px;margin-bottom:18px}
+  .card{padding:14px 16px}.card-value{font-size:24px}
+  .fbar{padding:10px;gap:7px}.fbar input{width:100%;flex:1 1 100%}.fbar select{flex:1;min-width:0}.frs{padding:5px 6px}.rcount{width:100%;margin-left:0;text-align:right}
+  .twrap table{min-width:700px;font-size:12px}.twrap td{padding:8px 10px}.twrap thead th{padding:9px 10px}
+  .section-title{font-size:14px}.pr{min-width:530px;font-size:12px}.pr>div{padding:9px 10px}
+  .modal{width:100%;max-width:100vw;max-height:100vh;border-radius:0}.mh{padding:13px 16px}.mbody{padding:15px 16px}.dg{grid-template-columns:1fr;gap:9px}
+  .lock-card{padding:26px 22px}
+}
+.sc{background:#fff;border-radius:10px;border:1px solid #e8edf5;padding:20px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.sc h3{font-size:14px;font-weight:600;margin-bottom:10px}
+.ibox{background:#eff3ff;border:1px solid #c5d2f6;border-radius:8px;padding:12px 14px;font-size:13px;color:#3b5bdb;line-height:1.5}
+.empty{text-align:center;padding:36px 20px;color:#9ca3af;font-size:14px}
+.chk-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
+.chk-item{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 6px;border-radius:4px}
+.chk-item:hover{background:#f7f9fd}
+.chk-item input{cursor:pointer}
+.exp-section{margin-bottom:20px}
+.exp-section h4{font-size:13px;font-weight:600;margin-bottom:8px;color:#1a1a2e}
+.mode2-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.mode2-tbl th,.mode2-tbl td{border:1px solid #e0e6ef;padding:6px 10px;text-align:center}
+.mode2-tbl th{background:#f7f9fd;font-weight:600}
+.mode2-tbl .rc{text-align:left;font-weight:500}
+'''
+
+    sync_section = f'''<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
+<div class="di"><label>最後同步時間</label><div class="dv">{NOW_STR}</div></div>
+<div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
+<div class="di"><label>商標案件</label><div class="dv">{tm_c} 筆</div></div>
+<div class="di"><label>專利案件</label><div class="dv">{pt_c} 筆</div></div>
+<div class="di"><label>產品登記</label><div class="dv">{rg_c} 筆</div></div>
+</div></div>'''
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>正瀚生技｜智財與登記管理</title>
+<style>{css}</style>
+</head>
+<body class="locked">
+<div id="app-lock" class="lock-screen">
+  <div class="lock-card">
+    <div class="lock-logo">CH BIOTECH</div>
+    <div class="lock-sub">智財與登記管理系統</div>
+    <form onsubmit="unlockApp(event)">
+      <input id="app-password" type="password" autocomplete="current-password" placeholder="請輸入密碼" autofocus>
+      <button type="submit">進入系統</button>
+      <div id="lock-error" class="lock-error"></div>
+    </form>
+  </div>
+</div>
+<aside id="sidebar">
+  <div class="brand">
+    <div class="brand-logo">CH</div>
+    <div class="brand-sub">BIOTECH</div>
+    <div class="brand-title">正瀚生技<br>智財與登記管理</div>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">管理工作台</div>
+    <div class="nav-item active" onclick="showPage('overview',this)"><span style="flex:1">▦ 主管總覽</span></div>
+    <div class="nav-item" onclick="showPage('trademark',this)"><span style="flex:1">® 商標管理</span><span class="nav-badge">{tm_c}</span></div>
+    <div class="nav-item" onclick="showPage('patent',this)"><span style="flex:1">◇ 專利管理</span><span class="nav-badge">{pt_c}</span></div>
+    <div class="nav-item" onclick="showPage('registration',this)"><span style="flex:1">▤ 產品登記</span><span class="nav-badge">{rg_c}</span></div>
+    <div class="nav-item" onclick="showPage('alerts',this)"><span style="flex:1">◷ 期限提醒</span><span class="nav-badge alert" id="nba">—</span></div>
+    <div class="nav-section" style="margin-top:10px">設定</div>
+    <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
+  </nav>
+  <div class="sidebar-footer">同步：{NOW_STR}<br>© 正瀚生技 CH BIOTECH</div>
+</aside>
+<main id="main">
+  <div class="topbar">
+    <div class="topbar-left" id="bc">管理中心 ／ <span>主管總覽</span></div>
+    <div id="topbar-actions"></div>
+  </div>
+  <div class="content" id="content"></div>
+</main>
+
+<!-- 案件明細 Modal -->
+<div class="mo" id="mo" onclick="closeMo(event)">
+  <div class="modal">
+    <div class="mh"><h3 id="mt">案件明細</h3><button class="mclose" onclick="closeMo()">✕</button></div>
+    <div class="mbody" id="mb"></div>
+  </div>
+</div>
+
+<!-- 匯出 Modal -->
+<div class="mo" id="expMo" onclick="closeExpMo(event)">
+  <div class="modal" style="max-width:740px">
+    <div class="mh"><h3 id="expTitle">匯出資料</h3><button class="mclose" onclick="closeExpMo()">✕</button></div>
+    <div class="mbody">
+      <div class="exp-section">
+        <h4>模式 1：自選欄位匯出</h4>
+        <div class="chk-grid" id="expColList"></div>
+        <button class="btn-primary" style="margin-top:8px" onclick="doMode1Export('csv')">↓ 匯出 CSV</button>
+        <button class="btn-outline" style="margin-top:8px;margin-left:6px" onclick="doMode1Export('pdf')">匯出 PDF</button>
+      </div>
+      <hr style="border:none;border-top:1px solid #e8edf5;margin:16px 0">
+      <div class="exp-section" id="mode2Section">
+        <h4>模式 2：各國登記類別彙總表（自行取得 vs 協助客戶）</h4>
+        <button class="btn-outline" onclick="doMode2Preview()">預覽彙總表</button>
+        <button class="btn-primary" style="margin-left:8px" onclick="doMode2Export('csv')">↓ 匯出 CSV</button>
+        <button class="btn-outline" style="margin-left:6px" onclick="doMode2Export('pdf')">匯出 PDF</button>
+        <div id="mode2Preview" style="margin-top:14px;overflow-x:auto"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="raw-data">{data_js}</script>
+<script>
+const PASS_HASH = 'c5e8aa9dba7646c26a2241b8fd9d257834b96c6aed1722fdf40cbdd18072195c';
+async function unlockApp(e) {{
+  e.preventDefault();
+  const input = document.getElementById('app-password');
+  const msg = document.getElementById('lock-error');
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input.value));
+  const hash = Array.from(new Uint8Array(bytes)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  if (hash === PASS_HASH) {{
+    document.body.classList.remove('locked');
+    document.getElementById('app-lock').remove();
+  }} else {{
+    msg.textContent = '密碼錯誤，請重新輸入';
+    input.value = '';
+    input.focus();
+  }}
+}}
+const RAW = JSON.parse(document.getElementById('raw-data').textContent);
+const REG_HIDE = new Set({reg_hide_js});
+const NOW_STR = '{NOW_STR}';
+const SHEET_NAMES = {{
+  trademark: '{SHEET_NAMES['trademark']}',
+  patent:    '{SHEET_NAMES['patent']}',
+  registration: '{SHEET_NAMES['registration']}'
+}};
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function esc(s) {{ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+function dlCls(s) {{
+  const m = {{'正常':'正常','期限已過':'期限已過','即將到期':'即將到期',
+    '即將到期(30天)':'30','即將到期(90天)':'90','即將到期(180天)':'180','即將到期(365天)':'365',
+    '待補期限':'待補期限','日期異常':'日期異常','N/A':'NA'}};
+  return 'dl-' + (m[s] || '待補期限');
+}}
+function badge(t, c) {{ return `<span class="badge ${{c}}">${{esc(t)}}</span>`; }}
+function dlBadge(s) {{ return badge(s, dlCls(s)); }}
+
+// ── State ─────────────────────────────────────────────────────────────────
+let pg = 'overview', cur = 1, pp = 30;
+let flt = {{q:'', country:'all', tmSt:'all', ptSt:'all', ptType:'all', rgSt:'all', rgType:'all'}};
+let srt = {{col:null, asc:true}};
+
+function setF(k, v) {{ flt[k] = v; cur = 1; render(); }}
+function resetF() {{
+  if (pg==='trademark') Object.assign(flt, {{q:'',country:'all',tmSt:'all'}});
+  else if (pg==='patent') Object.assign(flt, {{q:'',country:'all',ptSt:'all',ptType:'all'}});
+  else if (pg==='registration') Object.assign(flt, {{q:'',country:'all',rgSt:'all',rgType:'all'}});
+  cur = 1; render();
+}}
+function sortBy(c) {{ srt.col===c ? srt.asc=!srt.asc : (srt.col=c, srt.asc=true); render(); }}
+function goP(n) {{ cur=n; render(); document.getElementById('main').scrollTo(0,0); }}
+
+// ── Page routing ──────────────────────────────────────────────────────────
+const PAGE_TITLES = {{overview:'主管總覽',trademark:'商標管理',patent:'專利管理',
+  registration:'產品登記',alerts:'期限提醒',sync:'資料與同步'}};
+
+function showPage(n, el) {{
+  pg = n; cur = 1;
+  Object.assign(flt, {{q:'',country:'all',tmSt:'all',ptSt:'all',ptType:'all',rgSt:'all',rgType:'all'}});
+  srt = {{col:null, asc:true}};
+  document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
+  if (el) el.classList.add('active');
+  document.getElementById('bc').innerHTML = '管理中心 ／ <span>' + PAGE_TITLES[n] + '</span>';
+  render();
+}}
+
+function render() {{
+  const el = document.getElementById('content');
+  const actions = document.getElementById('topbar-actions');
+  actions.innerHTML = '';
+  if (pg === 'overview')      el.innerHTML = renderOv();
+  else if (pg === 'trademark')  {{ el.innerHTML = renderTrademark(); actions.innerHTML = `<button class="btn-outline" onclick="openExpMo('trademark')">↓ 匯出</button>`; }}
+  else if (pg === 'patent')     el.innerHTML = renderPatent();
+  else if (pg === 'registration') {{
+    el.innerHTML = renderRegistration();
+    actions.innerHTML = `<button class="btn-outline" onclick="openExpMo('registration')">↓ 匯出</button>`;
+  }}
+  else if (pg === 'alerts')    el.innerHTML = renderAlerts();
+  else if (pg === 'sync')      el.innerHTML = `{sync_section}`;
+}}
+
+// ── Pager ─────────────────────────────────────────────────────────────────
+function mkPager(total, pages) {{
+  if (pages <= 1) return '';
+  let btns = '', prev = -1;
+  for (let i = 1; i <= pages; i++) {{
+    if (i===1 || i===pages || Math.abs(i-cur)<=2) {{
+      if (prev !== -1 && i-prev > 1) btns += '<span class="pgi">…</span>';
+      btns += `<button class="pgb${{i===cur?' apg':''}}" onclick="goP(${{i}})">${{i}}</button>`;
+      prev = i;
+    }}
+  }}
+  return `<div class="pgbar">
+    <button class="pgb" onclick="goP(${{cur-1}})" ${{cur===1?'disabled':''}}>‹</button>
+    ${{btns}}
+    <button class="pgb" onclick="goP(${{cur+1}})" ${{cur===pages?'disabled':''}}>›</button>
+    <span class="pgi">${{(cur-1)*pp+1}}–${{Math.min(cur*pp,total)}}/${{total}}</span>
+  </div>`;
+}}
+
+// ── Sort ──────────────────────────────────────────────────────────────────
+function applySort(d) {{
+  if (!srt.col) return d;
+  return [...d].sort((a,b) => {{
+    const va = a[srt.col]||'', vb = b[srt.col]||'';
+    return srt.asc ? (va<vb?-1:va>vb?1:0) : (va>vb?-1:va<vb?1:0);
+  }});
+}}
+
+// ── Overview ──────────────────────────────────────────────────────────────
+function buildAll() {{
+  const a = [];
+  RAW.trademark.forEach(r => a.push({{
+    _type:'商標', _name: r['商標']||r['商標案件']||r['商標名稱']||'—',
+    _country: r['國別']||'—', _status: r._status,
+    _deadline: r._end_date||'', _dl: r._deadline_status,
+    _appNo: r['申請號']||r['申請案號']||'', _sub: r['商標分類']||'', _raw: r
+  }}));
+  RAW.patent.forEach(r => a.push({{
+    _type:'專利', _name: r['專利名稱(中文)']||'—',
+    _country: r['國別']||'—', _status: r._status,
+    _deadline: r._end_date||'', _dl: r._deadline_status,
+    _appNo: r['申請案號']||'', _sub: r['專利類別']||'', _raw: r
+  }}));
+  RAW.registration.forEach(r => a.push({{
+    _type:'產品登記', _name: r['登記產品名']||'—',
+    _country: r['國別']||'—', _status: r._status,
+    _deadline: r._end_date||'', _dl: r._deadline_status,
+    _appNo: '', _sub: r['登記類別']||r['登記公司']||'', _raw: r
+  }}));
+  return a;
+}}
+const ALL = buildAll();
+
+// Alert count
+const ALERT_DL = new Set(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)']);
+document.getElementById('nba').textContent = ALL.filter(r => ALERT_DL.has(r._dl)).length;
+
+function renderOv() {{
+  const tm = RAW.trademark, pt = RAW.patent, rg = RAW.registration;
+  const tmGet = tm.filter(r=>r._status==='註冊案' || String(r['狀態/進度說明']||'').includes('已取證') || String(r['狀態/進度說明']||'').includes('已取得')).length;
+  const tmApply = tm.filter(r=>{{ const s=String(r['狀態/進度說明']||''); return s.includes('核駁案') || s.includes('審查中'); }}).length;
+  const ptGet = pt.filter(r=>r._status==='已取得').length;
+  const rgGet = rg.filter(r=>r._status==='已取得').length;
+  const tmOver = tm.filter(r=>r._deadline_status==='期限已過').length;
+  const tmSoon = tm.filter(r=>r._deadline_status==='即將到期').length;
+  const rgSoon = rg.filter(r=>ALERT_DL.has(r._deadline_status)).length;
+  const alertN = ALL.filter(r=>ALERT_DL.has(r._dl)).length;
+  const pri = ALL.filter(r=>ALERT_DL.has(r._dl))
+    .sort((a,b)=>(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'].indexOf(a._dl)||9)
+                -(['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'].indexOf(b._dl)||9));
+
+  const priRows = pri.length===0
+    ? '<div class="plist"><div class="empty">目前無需立即關注的案件 ✓</div></div>'
+    : '<div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限</div><div>提醒</div></div>'
+      + pri.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+          <div><div class="cn">${{esc(r._name)}}</div><div class="cs">${{esc(r._sub)}}</div></div>
+          <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
+          <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
+          <div>${{dlBadge(r._dl)}}</div>
+        </div>`).join('')+'</div>';
+
+  return `<div class="ov-grid">
+    <div class="card"><div class="card-label">® 商標</div><div class="card-value">${{tm.length}}</div><div class="card-sub">已取證 ${{tmGet}} ／ 申請中 ${{tmApply}}</div></div>
+    <div class="card"><div class="card-label">◇ 專利</div><div class="card-value">${{pt.length}}</div><div class="card-sub">已取得 ${{ptGet}} ／ 申請中 ${{pt.length-ptGet}}</div></div>
+    <div class="card"><div class="card-label">▤ 產品登記</div><div class="card-value">${{rg.length}}</div><div class="card-sub">已取得 ${{rgGet}} ／ 辦理中 ${{rg.length-rgGet}}</div></div>
+  </div>
+  <div class="section-title">優先關注事項</div>
+  ${{priRows}}`;
+}}
+
+// ── Trademark ─────────────────────────────────────────────────────────────
+function renderTrademark() {{
+  let d = [...RAW.trademark];
+  if (flt.q) {{
+    const q = flt.q.toLowerCase();
+    d = d.filter(r =>
+      (r['商標']||r['商標案件']||r['商標名稱']||'').toLowerCase().includes(q) ||
+      (r['申請號']||r['申請案號']||'').toLowerCase().includes(q) ||
+      (r['國別']||'').toLowerCase().includes(q));
+  }}
+  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
+  if (flt.tmSt!=='all') d = d.filter(r=>(r['狀態/進度說明']||r._status)===flt.tmSt);
+  d = applySort(d);
+
+  const total = d.length, pages = Math.ceil(total/pp)||1;
+  if (cur>pages) cur=pages;
+  const rows = d.slice((cur-1)*pp, cur*pp);
+  const countries = [...new Set(RAW.trademark.map(r=>r['國別']).filter(Boolean))].sort();
+  const tmStatuses = [...new Set(RAW.trademark.map(r=>r['狀態/進度說明']||r._status).filter(Boolean))].sort();
+
+  const fbar = `<div class="fbar">
+    <input type="text" placeholder="搜尋商標名稱、申請案號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
+    <select onchange="setF('country',this.value)">
+      <option value="all">所有國別</option>
+      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
+    </select>
+    <select onchange="setF('tmSt',this.value)">
+      <option value="all">所有進度</option>
+      ${{tmStatuses.map(s=>`<option value="${{s}}"${{flt.tmSt===s?' selected':''}}>${{s}}</option>`).join('')}}
+    </select>
+    <span class="frs" onclick="resetF()">重設</span>
+    <span class="rcount">共 ${{total}} 筆${{total!==RAW.trademark.length?' (全 '+RAW.trademark.length+')':''}}</span>
+  </div>`;
+
+  const tbody = rows.length===0
+    ? `<tr><td colspan="7"><div class="empty">無符合條件的案件</div></td></tr>`
+    : rows.map(r => {{
+        const name = r['商標']||r['商標案件']||r['商標名稱']||'—';
+        const imgUrl = r['商標圖案']||r['商標圖示']||r['圖片URL']||r['圖片']||'';
+        const imgTag = imgUrl && !String(imgUrl).startsWith('#') ? `<img src="${{esc(imgUrl)}}" onerror="this.style.display='none'" style="width:28px;height:28px;object-fit:contain;vertical-align:middle;margin-right:6px;border-radius:4px">` : '';
+        const appNo = r['申請號']||r['申請案號']||'—';
+        const regNo = r['註冊編號']||r['註冊號']||r['證書號 (進度)']||r['證書號(進度)']||'—';
+        const cls = r['申請類別']||r['類別']||'';
+        return `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+          <td><div style="display:flex;align-items:flex-start">${{imgTag}}<div><div class="tm-name">${{esc(name)}}</div></div></div></td>
+          <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
+          <td style="font-size:12px">${{esc(cls)}}</td>
+          <td>${{badge(r['狀態/進度說明']||r._status,'b-'+(r['狀態/進度說明']||r._status))}}</td>
+          <td style="font-size:12px;color:#4a5568">${{esc(appNo)}}</td>
+          <td style="font-size:12px;color:#4a5568">${{esc(regNo)}}</td>
+          <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'-')}}</td>
+        </tr>`;
+      }}).join('');
+
+  return fbar + `<div class="twrap"><table>
+    <thead><tr>
+      <th onclick="sortBy('_name')">商標名</th>
+      <th onclick="sortBy('_country')">國別</th>
+      <th>申請類別</th>
+      <th onclick="sortBy('_status')">狀態/進度說明</th>
+      <th>申請案號</th>
+      <th>註冊號</th>
+      <th onclick="sortBy('_end_date')">使用期限（到期日）</th>
+    </tr></thead>
+    <tbody>${{tbody}}</tbody>
+  </table>${{mkPager(total,pages)}}</div>`;
+}}
+
+// ── Patent ────────────────────────────────────────────────────────────────
+function renderPatent() {{
+  let d = [...RAW.patent];
+  if (flt.q) {{
+    const q = flt.q.toLowerCase();
+    d = d.filter(r =>
+      (r['專利名稱(中文)']||'').toLowerCase().includes(q) ||
+      (r['申請案號']||'').toLowerCase().includes(q) ||
+      (r['專利編號']||'').toLowerCase().includes(q) ||
+      (r['國別']||'').toLowerCase().includes(q));
+  }}
+  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
+  if (flt.ptSt!=='all') d = d.filter(r=>r._status===flt.ptSt);
+  if (flt.ptType!=='all') d = d.filter(r=>(r['專利類別']||'')=== flt.ptType);
+  d = applySort(d);
+
+  const total = d.length, pages = Math.ceil(total/pp)||1;
+  if (cur>pages) cur=pages;
+  const rows = d.slice((cur-1)*pp, cur*pp);
+  const countries = [...new Set(RAW.patent.map(r=>r['國別']).filter(Boolean))].sort();
+  const ptTypes = [...new Set(RAW.patent.map(r=>r['專利類別']).filter(Boolean))].sort();
+
+  const fbar = `<div class="fbar">
+    <input type="text" placeholder="搜尋專利名稱、申請案號、專利編號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
+    <select onchange="setF('country',this.value)">
+      <option value="all">所有國別</option>
+      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
+    </select>
+    <select onchange="setF('ptType',this.value)">
+      <option value="all">所有類別</option>
+      ${{ptTypes.map(t=>`<option value="${{esc(t)}}"${{flt.ptType===t?' selected':''}}>${{esc(t)}}</option>`).join('')}}
+    </select>
+    <select onchange="setF('ptSt',this.value)">
+      <option value="all">所有狀態</option>
+      ${{['已取得','申請中','已結案'].map(s=>`<option value="${{s}}"${{flt.ptSt===s?' selected':''}}>${{s}}</option>`).join('')}}
+    </select>
+    <span class="frs" onclick="resetF()">重設</span>
+    <span class="rcount">共 ${{total}} 筆${{total!==RAW.patent.length?' (全 '+RAW.patent.length+')':''}}</span>
+  </div>`;
+
+  const tbody = rows.length===0
+    ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
+    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+        <td><div style="font-weight:500;color:#1a1a2e">${{esc(r['專利名稱(中文)']||'—')}}</div><div class="cs">${{esc(r['專利類別']||'')}}</div></td>
+        <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
+        <td style="font-size:12px">${{esc(r['申請案號']||'—')}}</td>
+        <td style="font-size:12px">${{esc(r['專利編號']||'—')}}</td>
+        <td>${{badge(r._status,'b-'+r._status)}}</td>
+        <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'—')}}</td>
+      </tr>`).join('');
+
+  return fbar + `<div class="twrap"><table>
+    <thead><tr>
+      <th onclick="sortBy('_name')">專利名稱（中文）</th>
+      <th onclick="sortBy('_country')">國別</th>
+      <th>申請案號</th>
+      <th>專利編號</th>
+      <th onclick="sortBy('_status')">目前狀態</th>
+      <th onclick="sortBy('_end_date')">證書到期日</th>
+    </tr></thead>
+    <tbody>${{tbody}}</tbody>
+  </table>${{mkPager(total,pages)}}</div>`;
+}}
+
+// ── Registration ──────────────────────────────────────────────────────────
+function renderRegistration() {{
+  let d = [...RAW.registration];
+  if (flt.q) {{
+    const q = flt.q.toLowerCase();
+    d = d.filter(r =>
+      (r['登記產品名']||'').toLowerCase().includes(q) ||
+      (r['國別']||'').toLowerCase().includes(q) ||
+      (r['證書/License ID']||'').toLowerCase().includes(q) ||
+      (r['登記公司']||'').toLowerCase().includes(q));
+  }}
+  if (flt.country!=='all') d = d.filter(r=>r['國別']===flt.country);
+  if (flt.rgSt!=='all') d = d.filter(r=>r._status===flt.rgSt);
+  if (flt.rgType!=='all') d = d.filter(r=>(r['登記類別']||'')=== flt.rgType);
+  d = applySort(d);
+
+  const total = d.length, pages = Math.ceil(total/pp)||1;
+  if (cur>pages) cur=pages;
+  const rows = d.slice((cur-1)*pp, cur*pp);
+  const countries = [...new Set(RAW.registration.map(r=>r['國別']).filter(Boolean))].sort();
+  const rgTypes = [...new Set(RAW.registration.map(r=>r['登記類別']).filter(Boolean))].sort();
+  const statuses = [...new Set(RAW.registration.map(r=>r._status).filter(Boolean))].sort();
+
+  const fbar = `<div class="fbar">
+    <input type="text" placeholder="搜尋產品名稱、國別、證書號…" oninput="setF('q',this.value)" value="${{esc(flt.q)}}">
+    <select onchange="setF('country',this.value)">
+      <option value="all">所有國別</option>
+      ${{countries.map(c=>`<option value="${{esc(c)}}"${{flt.country===c?' selected':''}}>${{esc(c)}}</option>`).join('')}}
+    </select>
+    ${{rgTypes.length?`<select onchange="setF('rgType',this.value)">
+      <option value="all">所有登記類別</option>
+      ${{rgTypes.map(t=>`<option value="${{esc(t)}}"${{flt.rgType===t?' selected':''}}>${{esc(t)}}</option>`).join('')}}
+    </select>`:''}}<select onchange="setF('rgSt',this.value)">
+      <option value="all">所有狀態</option>
+      ${{statuses.map(s=>`<option value="${{esc(s)}}"${{flt.rgSt===s?' selected':''}}>${{s}}</option>`).join('')}}
+    </select>
+    <span class="frs" onclick="resetF()">重設</span>
+    <span class="rcount">共 ${{total}} 筆${{total!==RAW.registration.length?' (全 '+RAW.registration.length+')':''}}</span>
+  </div>`;
+
+  const tbody = rows.length===0
+    ? `<tr><td colspan="6"><div class="empty">無符合條件的案件</div></td></tr>`
+    : rows.map(r => `<tr onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+        <td><div class="cn">${{esc(r['登記產品名']||'—')}}</div></td>
+        <td style="font-size:12px">${{esc(r['登記類別']||'—')}}</td>
+        <td style="font-size:12px">${{esc(r['國別']||'—')}}</td>
+        <td style="font-size:12px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${{esc(r['登記公司']||'—')}}</td>
+        <td>${{badge(r._status,'b-'+r._status)}}</td>
+        <td style="font-size:12px;color:#6b7a99">${{esc(r._end_date||'—')}}</td>
+      </tr>`).join('');
+
+  return fbar + `<div class="twrap"><table>
+    <thead><tr>
+      <th onclick="sortBy('_name')">登記產品名</th>
+      <th onclick="sortBy('_sub')">登記類別</th>
+      <th onclick="sortBy('_country')">國別</th>
+      <th>登記公司</th>
+      <th onclick="sortBy('_status')">狀態</th>
+      <th onclick="sortBy('_end_date')">有效期限</th>
+    </tr></thead>
+    <tbody>${{tbody}}</tbody>
+  </table>${{mkPager(total,pages)}}</div>`;
+}}
+
+// ── Alerts ────────────────────────────────────────────────────────────────
+function renderAlerts() {{
+  const RANKS = ['期限已過','即將到期','即將到期(30天)','即將到期(90天)','即將到期(180天)','即將到期(365天)'];
+  const LABELS = {{'期限已過':'⚠ 期限已過','即將到期':'🟠 6個月內到期','即將到期(30天)':'🔴 30天內到期',
+    '即將到期(90天)':'🟠 90天內到期','即將到期(180天)':'🟡 180天內到期','即將到期(365天)':'🟡 365天內到期'}};
+  let html = RANKS.map(dl => {{
+    const items = ALL.filter(r=>r._dl===dl);
+    if (!items.length) return '';
+    return `<div style="margin-bottom:20px"><div class="section-title">${{LABELS[dl]}} (${{items.length}})</div>
+      <div class="plist"><div class="pr prh"><div>案件名稱</div><div>類型・國別</div><div>期限日期</div><div>提醒</div></div>
+      ${{items.map(r=>`<div class="pr" onclick='openMo(${{JSON.stringify(JSON.stringify(r))}})'">
+        <div><div class="cn">${{esc(r._name)}}</div></div>
+        <div style="font-size:12px">${{esc(r._type+'·'+r._country)}}</div>
+        <div style="font-size:12px;color:#6b7a99">${{esc(r._deadline||'—')}}</div>
+        <div>${{dlBadge(r._dl)}}</div>
+      </div>`).join('')}}
+      </div></div>`;
+  }}).join('');
+  return html || '<div class="empty" style="padding:60px">目前無需關注的到期案件 ✓</div>';
+}}
+
+// ── Modal ─────────────────────────────────────────────────────────────────
+function openMo(s) {{
+  let r; try {{ r = JSON.parse(s); }} catch {{ return; }}
+  const raw = r._raw || r;
+  const type = r._type || '';
+  document.getElementById('mt').textContent = type + ' 案件明細';
+  const SKIP = new Set(['_status','_end_date','_deadline_status','_start_date','_type','_name','_country','_deadline','_dl','_appNo','_sub','_raw','_cert']);
+  const FULL_COLS = new Set(['專利名稱(中文)','專利名稱(英文)','Raw Materials','備註','說明','目前狀態']);
+
+  let topHtml = `<div class="dg" style="margin-bottom:14px">`;
+  if (type==='商標') {{
+    const tmDisplayStatus = raw['狀態/進度說明'] || raw['進度狀況'] || raw['進度狀態'] || r._status || '—';
+    topHtml += `<div class="di"><label>類型</label><div class="dv">${{badge(type,'b-T')}}</div></div>
+    <div class="di"><label>狀態</label><div class="dv">${{badge(tmDisplayStatus,'b-'+(r._status||''))}}</div></div>
+    <div class="di"><label>使用起始日</label><div class="dv">${{esc(raw._start_date||'—')}}</div></div>
+    <div class="di"><label>使用到期日</label><div class="dv">${{esc(raw._end_date||'—')}} ${{dlBadge(raw._deadline_status)}}</div></div>`;
+  }} else {{
+    topHtml += `<div class="di"><label>狀態</label><div class="dv">${{badge(r._status||'—','b-'+(r._status||''))}}</div></div>`;
+  }}
+  topHtml += '</div><hr style="border:none;border-top:1px solid #f0f4fa;margin:4px 0 12px"><div class="dg">';
+
+  const hideSet = type==='產品登記' ? REG_HIDE : new Set();
+  let items;
+  if (type==='商標') {{
+    const tmCols = [
+      ['商標案件', raw['商標案件']||raw['商標']||raw['商標名稱']],
+      ['商標圖案', raw['商標圖案']||raw['商標圖示']||raw['圖片URL']||raw['圖片']],
+      ['商標類型', raw['商標分類']],
+      ['國別', raw['國別']],
+      ['類別', raw['申請類別']||raw['類別']],
+      ['申請案號', raw['申請案號']||raw['申請號']],
+      ['申請日期', raw['申請日期']],
+      ['狀態/進度說明', raw['狀態/進度說明']||raw['進度狀況']||raw['進度狀態']],
+      ['註冊號', raw['註冊編號']||raw['註冊號']||raw['證書號 (進度)']||raw['證書號(進度)']],
+      ['商標標示', raw['商標標示']],
+      ['使用期間-取得日期', raw['使用期間-起始']||raw['_start_date']],
+      ['使用期間-到期日期', raw['使用期間-到期']||raw['_end_date']],
+    ];
+    items = tmCols.map(([k,v]) => `<div class="di${{k==='商標圖案'?' full':''}}"><label>${{k}}</label><div class="dv">${{esc((v && !String(v).startsWith('#'))?v:'—')}}</div></div>`).join('');
+  }} else {{
+    items = Object.entries(raw).filter(([k,v]) => !SKIP.has(k) && !hideSet.has(k.toLowerCase()))
+      .map(([k,v]) => `<div class="di${{FULL_COLS.has(k)?' full':''}}"><label>${{esc(k)}}</label><div class="dv">${{esc(v||'—')}}</div></div>`)
+      .join('');
+  }}
+  document.getElementById('mb').innerHTML = topHtml + items + '</div>';
+  document.getElementById('mo').classList.add('open');
+}}
+function closeMo(e) {{ if (!e||e.target===document.getElementById('mo')) document.getElementById('mo').classList.remove('open'); }}
+
+// ── Export ────────────────────────────────────────────────────────────────
+let expType = 'registration';
+function openExpMo(kind) {{
+  expType = kind || 'registration';
+  if (expType === 'trademark') {{
+    const keys = ['商標分類','商標案件','商標圖案','國別','申請案號','申請日期','申請類別','狀態/進度說明','註冊編號','商標標示','使用期間-起始','使用期間-到期'];
+    document.getElementById('expTitle').textContent = '匯出商標資料';
+    document.querySelector('#mode2Section h4').textContent = '模式 2：商標狀態／國別數量彙總';
+    document.getElementById('expColList').innerHTML = keys.map(k => `<label class="chk-item"><input type="checkbox" data-key="${{esc(k)}}" checked> ${{esc(k)}}</label>`).join('');
+    document.getElementById('mode2Preview').innerHTML = renderTrademarkSummary();
+    document.getElementById('expMo').classList.add('open');
+    return;
+  }}
+  document.getElementById('expTitle').textContent = '匯出產品登記資料';
+  // Build column checkboxes from registration data
+  const allKeys = new Set();
+  RAW.registration.forEach(r => Object.keys(r).forEach(k => {{ if (!k.startsWith('_') && !REG_HIDE.has(k.toLowerCase())) allKeys.add(k); }}));
+  const suggested = ['登記產品名','登記類別','國別','登記公司','證書/License ID','取得日期','進度','證書有效期限'];
+  const ordered = [...suggested.filter(k=>allKeys.has(k)), ...[...allKeys].filter(k=>!suggested.includes(k))];
+  const defaultOn = new Set(['登記產品名','登記類別','國別','登記公司','狀態','進度','證書有效期限']);
+
+  document.getElementById('expColList').innerHTML = ordered.map(k =>
+    `<label class="chk-item"><input type="checkbox" data-key="${{esc(k)}}" ${{defaultOn.has(k)?'checked':''}}> ${{esc(k)}}</label>`
+  ).join('');
+  document.getElementById('mode2Preview').innerHTML = '';
+  document.getElementById('expMo').classList.add('open');
+}}
+function closeExpMo(e) {{ if (!e||e.target===document.getElementById('expMo')) document.getElementById('expMo').classList.remove('open'); }}
+
+function exportRows() {{
+  if (expType==='trademark') {{
+    let d=[...RAW.trademark],q=(flt.q||'').toLowerCase();
+    if(q)d=d.filter(r=>[r['商標案件'],r['申請案號'],r['國別'],r['註冊編號']].some(v=>String(v||'').toLowerCase().includes(q)));
+    if(flt.country!=='all')d=d.filter(r=>r['國別']===flt.country);
+    if(flt.tmSt!=='all')d=d.filter(r=>(r['狀態/進度說明']||r._status)===flt.tmSt);
+    return d;
+  }}
+  let d=[...RAW.registration],q=(flt.q||'').toLowerCase();
+  if(q)d=d.filter(r=>[r['登記產品名'],r['國別'],r['證書/License ID'],r['登記公司']].some(v=>String(v||'').toLowerCase().includes(q)));
+  if(flt.country!=='all')d=d.filter(r=>r['國別']===flt.country);
+  if(flt.rgSt!=='all')d=d.filter(r=>r._status===flt.rgSt);
+  if(flt.rgType!=='all')d=d.filter(r=>r['登記類別']===flt.rgType);
+  return d;
+}}
+function csvCell(v) {{ return '"'+String(v??'').replace(/"/g,'""')+'"'; }}
+function exportPDF(title,cols,rows) {{
+  const body=rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c]||'—')+'</td>').join('')+'</tr>').join('');
+  const w=window.open('','_blank');if(!w){{alert('請允許瀏覽器開啟彈出視窗後再匯出 PDF');return;}}
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>body{{font-family:Arial,"Noto Sans TC",sans-serif;padding:24px;color:#222}}table{{border-collapse:collapse;width:100%;font-size:11px}}th,td{{border:1px solid #bbb;padding:5px;text-align:left;vertical-align:top}}th{{background:#eef2f7}}</style></head><body><h1>'+esc(title)+'</h1><p>匯出時間：'+esc(NOW_STR)+'；共 '+rows.length+' 筆</p><table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join('')+'</tr></thead><tbody>'+body+'</tbody></table></body></html>');
+  w.document.close();w.focus();setTimeout(()=>w.print(),250);
+}}
+
+function doMode1Export(fmt) {{
+  const cols = [...document.querySelectorAll('#expColList input:checked')].map(el => el.dataset.key);
+  const rows = exportRows();
+  if (!cols.length) {{ alert('請至少勾選一個欄位'); return; }}
+  const prefix = expType==='trademark' ? '正瀚_商標' : '正瀚_產品登記';
+  if (fmt==='pdf') {{ exportPDF(prefix+'明細',cols,rows); return; }}
+  const csv = '﻿' + [cols.join(','),
+    ...rows.map(r => cols.map(c=>'"'+(r[c]||'').replace(/"/g,'""')+'"').join(','))
+  ].join('\\n');
+  dlCSV(csv, prefix+'_{TODAY_STR}'.replace(/[/]/g,'') + '.csv');
+}}
+
+function doMode2Preview() {{
+  document.getElementById('mode2Preview').innerHTML = expType==='trademark' ? renderTrademarkSummary() : renderMode2HTML(buildMode2Table());
+}}
+
+function doMode2Export(fmt) {{
+  if (expType==='trademark') {{
+    const tbl=buildTrademarkSummary(), cols=['國別','已取證','申請中','放棄案','合計'];
+    if(fmt==='pdf'){{exportPDF('商標狀態／國別彙總',cols,tbl.exportRows);return;}}
+    const csv='﻿'+[cols.map(csvCell).join(','),...tbl.exportRows.map(r=>cols.map(c=>csvCell(r[c])).join(','))].join('\\n');
+    dlCSV(csv,'正瀚_商標狀態彙總_{TODAY_STR}'.replace(/[/]/g,'')+'.csv');
+    return;
+  }}
+  const tbl = buildMode2Table();
+  const {{countries, types, data}} = tbl;
+  const header = ['國別/登記類別', ...types, '合計'];
+  const rows = countries.map(c => {{
+    const row = [c];
+    let tot = 0;
+    types.forEach(t => {{
+      const cell = (data[c]&&data[c][t]) || {{self:0, help:0}};
+      row.push(`自行${{cell.self}}/協助${{cell.help}}`);
+      tot += cell.self + cell.help;
+    }});
+    row.push(tot);
+    return row;
+  }});
+  const totalRow=['總計'];
+  types.forEach(t=>{{
+    let self=0,help=0;
+    countries.forEach(c=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};self+=x.self;help+=x.help;}});
+    totalRow.push('自行'+self+'/協助'+help);
+  }});
+  totalRow.push(countries.reduce((n,c)=>n+types.reduce((m,t)=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};return m+x.self+x.help;}},0),0));
+  rows.push(totalRow);
+  if(fmt==='pdf'){{const pdfRows=rows.map(row=>Object.fromEntries(header.map((h,i)=>[h,row[i]])));exportPDF('產品登記各國類別彙總',header,pdfRows);return;}}
+  const csv = '﻿' + [header.join(','), ...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
+  dlCSV(csv, '正瀚_產品登記彙總_{TODAY_STR}'.replace(/[/]/g,'') + '.csv');
+}}
+
+function buildTrademarkSummary() {{
+  const labels=['已取證','申請中','放棄案'], data={{}};
+  const normalize=s=>{{s=String(s||'');if(s.includes('已取證')||s.includes('已取得'))return '已取證';if(s.includes('放棄')||s.includes('失效'))return '放棄案';return '申請中';}};
+  RAW.trademark.forEach(r=>{{const c=r['國別']||'未填寫',t=normalize(r['狀態/進度說明']||r._status);if(!data[c])data[c]={{'已取證':0,'申請中':0,'放棄案':0}};data[c][t]++;}});
+  const countries=Object.keys(data).sort(), exportRows=countries.map(c=>{{const r={{國別:c}};labels.forEach(t=>r[t]=data[c][t]);r['合計']=labels.reduce((n,t)=>n+r[t],0);return r;}});
+  const total={{國別:'總計'}};labels.forEach(t=>total[t]=exportRows.reduce((n,r)=>n+r[t],0));total['合計']=labels.reduce((n,t)=>n+total[t],0);exportRows.push(total);
+  return {{exportRows,exportCols:['國別',...labels,'合計']}};
+}}
+function renderTrademarkSummary() {{
+  const tbl=buildTrademarkSummary(), rows=tbl.exportRows.map(r=>'<tr><td class="rc">'+esc(r['國別'])+'</td><td>'+r['已取證']+'</td><td>'+r['申請中']+'</td><td>'+r['放棄案']+'</td><td><strong>'+r['合計']+'</strong></td></tr>').join('');
+  return '<table class="mode2-tbl"><thead><tr><th class="rc">國別</th><th>已取證</th><th>申請中</th><th>放棄案</th><th>合計</th></tr></thead><tbody>'+rows+'</tbody></table><div style="font-size:11px;color:#8899bb;margin-top:6px">申請中包含審查中與核駁案</div>';
+}}
+
+function buildMode2Table() {{
+  const CH = 'CH Biotech R&D Co., Ltd';
+  const countries = [...new Set(RAW.registration.map(r=>r['國別']).filter(Boolean))].sort();
+  const types = [...new Set(RAW.registration.map(r=>r['登記類別']).filter(Boolean))].sort();
+  const data = {{}};
+  RAW.registration.forEach(r => {{
+    const c = r['國別']||'', t = r['登記類別']||'', co = r['登記公司']||'';
+    if (!c||!t) return;
+    if (!data[c]) data[c] = {{}};
+    if (!data[c][t]) data[c][t] = {{self:0, help:0}};
+    if (co === CH) data[c][t].self++; else data[c][t].help++;
+  }});
+  return {{countries, types, data}};
+}}
+
+function renderMode2HTML({{countries, types, data}}) {{
+  const hdr = `<tr><th class="rc">國別 ＼ 登記類別</th>${{types.map(t=>`<th>${{esc(t)}}</th>`).join('')}}<th>合計</th></tr>`;
+  const rows = countries.map(c => {{
+    let tot = 0;
+    const cells = types.map(t => {{
+      const cell = (data[c]&&data[c][t])||{{self:0,help:0}};
+      tot += cell.self+cell.help;
+      if (!cell.self && !cell.help) return '<td>—</td>';
+      return `<td>自行 ${{cell.self}}<br>協助 ${{cell.help}}</td>`;
+    }}).join('');
+    return `<tr><td class="rc">${{esc(c)}}</td>${{cells}}<td><strong>${{tot}}</strong></td></tr>`;
+  }}).join('');
+  const totals=types.map(t=>{{let self=0,help=0;countries.forEach(c=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};self+=x.self;help+=x.help;}});return '<td><strong>自行'+self+'/協助'+help+'</strong></td>';}}).join('');
+  const grand=countries.reduce((n,c)=>n+types.reduce((m,t)=>{{const x=(data[c]&&data[c][t])||{{self:0,help:0}};return m+x.self+x.help;}},0),0);
+  return `<table class="mode2-tbl"><thead>${{hdr}}</thead><tbody>${{rows}}<tr><td class="rc"><strong>總計</strong></td>${{totals}}<td><strong>${{grand}}</strong></td></tr></tbody></table>
+    <div style="font-size:11px;color:#8899bb;margin-top:6px">自行 = CH Biotech R&amp;D Co., Ltd；協助 = 非 CH Biotech（協助客戶取得）</div>`;
+}}
+
+function dlCSV(csv, name) {{
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {{type:'text/csv;charset=utf-8'}}));
+  a.download = name; a.click();
+}}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>'''
+    return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', HUB_JS + '\n</script>')
+
+HUB_CSS = r'''
+.reg-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.reg-summary-card{display:block;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}.reg-summary-card.is-active{border-color:#176d59;box-shadow:0 0 0 2px #176d5933}.reg-summary-card .card-label,.reg-summary-card .card-value{display:block}.reg-advanced{margin-bottom:12px}.reg-advanced>summary{cursor:pointer;font-weight:600}.reg-advanced .hub-filters{margin-top:12px}.reg-chart-grid{grid-template-columns:minmax(0,1fr)}.reg-chart select{max-width:100%}.reg-chart .custom-axis{align-items:flex-start}.reg-chart .custom-axis label{display:flex;flex-direction:column;gap:5px;max-width:100%}.reg-rates td{white-space:normal;min-width:140px;max-width:260px;overflow-wrap:anywhere}.reg-rates{max-height:60vh}.reg-chart .report-svg{max-width:230px}.reg-advanced .hub-options{z-index:8}
+
+.chart-tools{display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px}.chart-tools button{font-size:12px;padding:5px 9px}#chart-dialog{width:min(1000px,94vw);max-height:90dvh;overflow:auto;border:1px solid #d8e6df;border-radius:16px;padding:24px;color:#173e35}#chart-dialog::backdrop{background:#082c2866}.dialog-close{float:right}.chart-enlarged{max-width:760px;margin:20px auto}.report-svg{display:block;width:360px;max-width:100%;height:auto;margin:20px auto}.report-legend{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e2ede6}.report-legend i{width:10px;height:10px;border-radius:50%}.report-bar{height:12px;background:#edf3f0;margin-bottom:14px}.report-bar i{display:block;height:100%}.report-options,.report-actions{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}.report-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:20px 0}.report-fields label{overflow-wrap:anywhere}#report-error{color:#a63232}
+:root{--green:#17715e;--ink:#17362f;--line:#dce7e3}
+body{background:#f2f6f5;color:var(--ink)}
+#sidebar{background:linear-gradient(180deg,#0a342c,#0c4035);width:236px;min-width:236px}
+.brand,.sidebar-footer{border-color:#ffffff20}.brand-title{color:#b5d4ca}.brand-sub{color:#9ecabb}
+.nav-item{border:0;border-radius:10px;margin:4px 10px;color:#c3d9d2;padding:12px}
+.nav-item.active,.nav-item:hover{background:#5bddbb25;color:white;box-shadow:inset 3px 0 #5bd8ba}
+.nav-badge{background:#ffffff20;color:#d5f8ed}.nav-section{color:#9abeb1}
+.topbar{gap:14px;flex-wrap:wrap;padding:14px 24px}.content{width:100%;max-width:1580px;margin:auto;padding:24px}
+.topbar-left{display:none}.panel,.sc,.fbar,.twrap{background:white;border:1px solid var(--line);border-radius:16px;box-shadow:0 5px 22px #123d3008}
+button{font:inherit;cursor:pointer}.btn-primary{background:var(--green)}.btn-outline{color:var(--green);border-color:var(--line)}
+.hub-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}.hub-head h1{font-size:25px}.hub-head small{color:#768b82;font-size:11px}
+.hub-filters{padding:14px;display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px}
+.hub-filter{position:relative}.hub-filter summary{cursor:pointer;padding:8px 12px;border:1px solid var(--line);border-radius:9px;list-style:none}
+.hub-options{position:absolute;top:44px;left:0;width:280px;max-height:330px;overflow:auto;padding:12px;background:white;border:1px solid var(--line);border-radius:12px;z-index:30;box-shadow:0 10px 30px #123d3020}
+.hub-options label{display:flex;align-items:start;gap:8px;padding:7px;overflow-wrap:anywhere}.hub-options button{margin:0 8px 7px 0}
+.hub-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:24px}.panel{min-width:0;padding:18px}.panel h2{font-size:17px;margin-bottom:16px}
+.chart-mode{float:right;font-size:12px;border:1px solid var(--line);padding:5px;border-radius:6px;background:white}
+.donut{display:block;margin:0 auto 16px;width:180px;height:180px}.donut path{cursor:pointer;stroke:white;stroke-width:1}.donut path:hover{opacity:.7}.donut text{fill:var(--ink);font-size:22px;font-weight:700}
+.legend-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center;background:none;border:0;border-bottom:1px solid #edf3ef;padding:9px 0;width:100%;text-align:left;color:var(--ink);font-size:13px}.legend-row i{width:8px;height:8px;border-radius:50%}.legend-row span{overflow-wrap:anywhere}.legend-row small{white-space:nowrap;color:#687e75}
+.bar-track{height:8px;background:#edf3ef;border-radius:8px;overflow:hidden;margin:0 0 6px}.bar-track i{display:block;height:100%}
+.twrap{max-height:66vh;overflow:auto}.twrap table{min-width:880px}.twrap th{position:sticky;top:0;z-index:2;background:#f5faf7;color:#607b6f;font-size:12px}.twrap td{white-space:nowrap;line-height:1.6;font-size:13px}.twrap td:first-child{min-width:220px;max-width:420px;white-space:normal;overflow-wrap:anywhere}.twrap tr{cursor:pointer}.hub-alerts{max-height:none}.hub-alerts table{min-width:780px}
+.hub-search{position:relative;flex:1;max-width:620px}.hub-search input{width:100%;padding:11px 14px;border:1px solid var(--line);background:#f7faf9;border-radius:11px;font:inherit}.search-pop{position:absolute;top:48px;left:0;right:0;background:white;box-shadow:0 12px 35px #163d3025;border:1px solid var(--line);border-radius:12px;max-height:65vh;overflow:auto;z-index:40}.search-pop:empty{display:none}.search-pop button{display:block;width:100%;background:white;border:0;border-bottom:1px solid var(--line);text-align:left;padding:12px;color:var(--ink)}.search-pop small{display:block;color:#74877e;margin-top:4px}
+#mo{justify-content:flex-end}#mo .modal{height:100vh;max-height:100dvh;width:560px;max-width:95vw;border-radius:18px 0 0 18px;transform:translateX(100%);transition:transform .2s}#mo.open .modal{transform:translateX(0)}.drawer-section{margin-bottom:24px}.drawer-section h3{font-size:15px;margin-bottom:12px}.dg{grid-template-columns:repeat(2,minmax(0,1fr))}.di{min-width:0;background:#f5faf7;border:1px solid var(--line);padding:10px;border-radius:9px}.di .dv{overflow-wrap:anywhere;white-space:pre-wrap;color:var(--ink)}.drawer-section summary{cursor:pointer;font-weight:600;margin-bottom:12px}
+.lock-screen{width:100%;background:#f2f6f5}.lock-card button{background:var(--green)}.pgbar{flex-wrap:wrap}.muted{color:#71877e;font-size:12px;margin-bottom:12px}
+@media(max-width:1500px){.hub-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.asset-dimension{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;margin-bottom:12px}.asset-dimension select{max-width:100%;border:1px solid #d6e6e1;border-radius:7px;padding:7px;background:white;color:inherit}
+.chart-title{line-height:1.5;overflow-wrap:anywhere}.chart-note{font-size:12px;line-height:1.6;color:#617a73;margin:10px 0}.custom-breakdown{border-top:1px solid #dce9e4;margin-top:16px;padding-top:12px}.custom-breakdown>summary{cursor:pointer;font-size:12px;line-height:1.6;font-weight:600}.breakdown-scroll{overflow:auto;max-height:300px;margin-top:10px}.breakdown-scroll table{min-width:410px;font-size:12px}.breakdown-scroll th,.breakdown-scroll td{padding:8px;white-space:nowrap}.breakdown-scroll th{position:sticky;top:0;background:#f3f8f6}
+.comparison-controls{border:1px solid #d9e7e1;border-radius:12px;padding:16px;margin:20px 0;background:#fff;min-width:0}.comparison-controls legend{font-size:16px;font-weight:600;padding:0 8px;color:#184c40}.comparison-controls:disabled{opacity:.55}.confirm-scope{background:#176d59!important;color:white!important;border-color:#176d59!important}.comparison-controls .custom-axis{margin:4px 0}.custom-axis{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:12px 0 20px}.custom-axis select{padding:8px;border:1px solid #d6e6e1;border-radius:7px}.hub-grid .chart-mode{float:none;margin-bottom:10px}.hub-grid .legend-row span{overflow-wrap:anywhere}
+@media(max-width:700px){.hub-grid{grid-template-columns:1fr}.panel{padding:18px}.content{padding:18px}}
+@media(max-width:900px){#sidebar{width:100%;min-width:0}.brand{display:block;padding:12px 18px}.brand-logo{font-size:18px}.brand-sub{display:none}.brand-title{margin:4px 0}.nav-item{margin:0;min-height:44px}.topbar{padding:10px 14px}.hub-head{align-items:flex-start}}
+@media(max-width:600px){.content{padding:12px}.hub-head{display:block}.hub-head h1{font-size:22px;margin-bottom:6px}.hub-filters{gap:6px}.hub-options{position:fixed;left:12px;right:12px;top:220px;width:auto}.hub-search input{font-size:16px}.dg{grid-template-columns:1fr}#mo .modal{max-width:100vw;border-radius:0}.hub-alerts td{font-size:12px}}
+'''
+
+HUB_JS = r'''
+// Intelligence Hub: all views derive from the same immutable source records.
+const TYPE_NAMES={trademark:'商標',patent:'專利',registration:'產品登記'};
+const countryAliases={'taiwan':'台灣','tw':'台灣','台湾':'台灣','usa':'美國','us':'美國','united states':'美國','united states of america':'美國','japan':'日本','jp':'日本','china':'中國','cn':'中國','brazil':'巴西','br':'巴西','eu':'歐盟','european union':'歐盟','europe':'歐洲','india':'印度','indonesia':'印尼','vietnam':'越南','thailand':'泰國','malaysia':'馬來西亞','canada':'加拿大','australia':'澳洲','korea':'韓國','south korea':'韓國','mexico':'墨西哥','argentina':'阿根廷','chile':'智利','peru':'秘魯','colombia':'哥倫比亞','south africa':'南非','new zealand':'紐西蘭','philippines':'菲律賓','singapore':'新加坡','germany':'德國','france':'法國','spain':'西班牙','italy':'義大利','uk':'英國','united kingdom':'英國','bulgaria':'保加利亞','russia':'俄羅斯','pct':'PCT（國際申請）'};
+function zhCountry(v){v=String(v||'未填寫').trim();if(/[\u3400-\u9fff]/.test(v))return v.replace(/\s*[（(][A-Za-z\s]+[)）]/g,'').replace('台湾','台灣').replace('臺灣','台灣').replace('澳大利亞','澳洲');return countryAliases[v.toLowerCase()]||v;}
+function rawStatus(r,t){const keys=t==='trademark'?['狀態/進度說明','進度狀況','進度狀態']:t==='patent'?['目前狀態','狀態','進度']:['進度','狀態'];return String(keys.map(k=>r[k]).find(v=>v&&String(v).trim())||'未填寫').trim();}
+const HUB=Object.entries(RAW).flatMap(([t,rows])=>rows.map((r,i)=>({id:t+'-'+i,t,raw:r,c:zhCountry(r['國別']),s:rawStatus(r,t),name:r['商標案件']||r['商標']||r['商標名稱']||r['專利名稱(中文)']||r['登記產品名']||'未命名',date:r._end_date||'',numbers:['申請案號','申請號','註冊編號','註冊號','專利編號','證書/License ID'].map(k=>r[k]||'').join(' ')})));
+const byId=new Map(HUB.map(r=>[r.id,r]));
+const ANALYSIS_KEYS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
+const ANALYSIS_LABELS={platform:'技術平台',substance:'技術物質',patentType:'專利類型',crop:'對象作物',effect:'對應逆境/功效'};
+function analysisValue(r,k){return String(r.raw[ANALYSIS_KEYS[k]]??r.raw['AI_'+ANALYSIS_KEYS[k]]??'未填寫').trim()||'未填寫';}
+// Split explicit list separators outside parentheses; retain chemical names and translations.
+function analysisValues(r,k){
+  const text=analysisValue(r,k);let depth=0,part='',values=[];
+  for(const c of text){
+    if('（('.includes(c))depth++;
+    if('）)'.includes(c))depth=Math.max(0,depth-1);
+    if(depth===0&&'、;；\n\r'.includes(c)){if(part.trim())values.push(part.trim());part='';}
+    else part+=c;
+  }
+  if(part.trim())values.push(part.trim());
+  return [...new Set(values.length?values:['未填寫'])];
+}
+function analysisMatches(r,k,scope){return analysisValues(r,k).some(v=>scope[k].has(v));}
+const CHOICES={country:[...new Set(HUB.map(r=>r.c))].sort((a,b)=>a.localeCompare(b,'zh-Hant')),type:Object.keys(TYPE_NAMES),status:['已完成','進行中','需處理','已放棄'],...Object.fromEntries(Object.keys(ANALYSIS_KEYS).map(k=>[k,[...new Set(HUB.filter(r=>r.t==='patent').flatMap(r=>analysisValues(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'))]))};
+let selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));
+let chartModes={trademark:'donut',patent:'donut',registration:'donut'},drill=null,globalQuery='',lastFocus=null;
+esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+function selected(r){return selection.country.has(r.c)&&selection.type.has(r.t)&&selection.status.has(managementStatus(r))&&(pg==='overview'||r.t!=='patent'||Object.keys(ANALYSIS_KEYS).every(k=>analysisMatches(r,k,selection)));}
+function rank(r){if(managementStatus(r)==='已完成')return 0;if(managementStatus(r)==='進行中')return 1;if(/核駁/.test(r.s))return 2;if(/結案/.test(r.s))return 3;if(/放棄|失效|撤回/.test(r.s))return 4;return 5;}
+function dateValue(r){return /^\d{4}-\d{2}-\d{2}$/.test(r.date)?Date.parse(r.date):Infinity;}
+function defaultOrder(a,b){return rank(a)-rank(b)||(dateValue(a)-dateValue(b)||0);}
+function attention(r){const d=dateValue(r);if(Number.isFinite(d)){const days=Math.ceil((d-Date.parse(NOW_STR.slice(0,10).replaceAll('/','-')))/86400000);if(days<0)return [0,'期限已過'];for(const [i,n]of [30,90,180,365].entries())if(days<=n)return [i+1,n+' 天內到期'];}if(/審查|申請中|申請案|辦理中/.test(r.s))return [5,'進度追蹤'];if(/核駁/.test(r.s))return [6,'核駁案'];if(!r.date)return [7,'待補期限'];if(r.raw._deadline_status==='日期異常')return [8,'日期異常'];return null;}
+const PALETTE=['#178269','#3976c5','#d39a28','#c95762','#8d70aa','#63a5a0','#aa8262'];
+function color(s){return PALETTE[CHOICES.status.indexOf(s)%PALETTE.length]||PALETTE[0];}
+
+function managementStatus(r){
+  if(/放棄|失效|撤回|結案/.test(r.s))return '已放棄';
+  if(/核駁|駁回|補正|異常/.test(r.s))return '需處理';
+  if(/領證中/.test(r.s))return '進行中';
+  if(/已取證|已取得|註冊案|專利通過|維持證書|已完成/.test(r.s))return '已完成';
+  if(/審查|審核|申請|辦理|登記中|領證/.test(r.s))return '進行中';
+  return '需處理';
+}
+function patentStatus(r){
+  if(/放棄|失效|撤回|結案/.test(r.s))return '放棄';
+  if(/專利通過|已取得/.test(r.s))return '專利通過';
+  if(/領證/.test(r.s))return '領證中';
+  if(/審核|審查|申請/.test(r.s))return '審核中';
+  return null;
+}
+function chartStatus(r){return r.t==='patent'?patentStatus(r):r.s;}
+function visibleChoices(k){
+  if(k==='substance')return CHOICES.substance.filter(v=>HUB.some(r=>r.t==='patent'&&analysisMatches(r,'platform',selection)&&analysisValues(r,k).includes(v)));
+  if(TYPE_NAMES[pg]&&k==='country')return CHOICES.country.filter(v=>HUB.some(r=>r.t===pg&&r.c===v));
+  if(TYPE_NAMES[pg]&&k!=='country'&&k!=='type'&&k!=='status')return CHOICES[k].filter(v=>HUB.some(r=>r.t===pg&&analysisValues(r,k).includes(v)));
+  return CHOICES[k];
+}
+function filterHTML(){
+  const keys=TYPE_NAMES[pg]?['country','status']:['country','type','status'];if(pg==='patent')keys.push(...Object.keys(ANALYSIS_KEYS));
+  return '<div class="panel hub-filters">'+keys.map(k=>{
+    const vs=visibleChoices(k);
+    return `<details class="hub-filter" name="hub-filter-menu"><summary onclick="closeOtherFilters(this.parentElement)">${{country:'國家／地區',type:'資產類型',status:'狀態',...ANALYSIS_LABELS}[k]} · ${vs.filter(v=>selection[k].has(v)).length}/${vs.length} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="selectGroup('${k}',true)">全選</button><button class="btn-outline" onclick="selectGroup('${k}',false)">取消全選</button>${vs.map(v=>`<label><input type="checkbox" ${selection[k].has(v)?'checked':''} onchange="changeSelection('${k}',${CHOICES[k].indexOf(v)},this.checked)">${esc(k==='type'?TYPE_NAMES[v]:v)}</label>`).join('')}</div></details>`;
+  }).join('')+'<button class="btn-outline" onclick="resetHub()">重設全部</button></div>';
+}
+function changeSelection(k,i,on){on?selection[k].add(CHOICES[k][i]):selection[k].delete(CHOICES[k][i]);syncSubstances(k);cur=1;refreshHub();}
+// Platform changes select all substances present in the newly selected platforms.
+function syncSubstances(k){if(k==='platform')selection.substance=new Set(visibleChoices('substance'));}
+function selectGroup(k,on){visibleChoices(k).forEach(v=>on?selection[k].add(v):selection[k].delete(v));syncSubstances(k);cur=1;refreshHub();}
+function resetHub(){selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));drill=null;render();}
+function closeOtherFilters(current){document.querySelectorAll('.hub-filter[open]').forEach(menu=>{if(menu!==current)menu.open=false;});}
+function refreshHub(){const open=[...document.querySelectorAll('.hub-filter')].map(x=>x.open);render();document.querySelectorAll('.hub-filter').forEach((x,i)=>x.open=open[i]);}
+function drillTo(t,s,dimension='status'){drill={t,s,dimension};showPage(t);}
+function matchesDrill(r){return !drill||r.t!==drill.t||(ANALYSIS_KEYS[drill.dimension]?analysisValues(r,drill.dimension).includes(drill.s):(drill.dimension==='country'?r.c:chartStatus(r))===drill.s);}
+const assetDimensions={trademark:'status',patent:'status',registration:'status'};
+
+let customDimension='status',analysisScope=null;
+function analysisRows(){
+  if(!analysisScope)return [];
+  return HUB.filter(r=>analysisScope.country.has(r.c)&&analysisScope.type.has(r.t)&&analysisScope.status.has(managementStatus(r)));
+}
+function scopeChanged(){
+  return !analysisScope||['country','type','status'].some(k=>CHOICES[k].some(v=>selection[k].has(v)!==analysisScope[k].has(v)));
+}
+function confirmAnalysisScope(){
+  analysisScope=Object.fromEntries(Object.entries(selection).map(([k,vs])=>[k,new Set(vs)]));
+  if(ANALYSIS_KEYS[customDimension])customDimension='status';
+  render();
+  document.getElementById('comparison-controls')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function analysisControls(){
+  const pending=HUB.filter(selected).length,dirty=scopeChanged();
+  return '<h2 class="section-title">1. 選定分析資料庫範圍</h2><p class="muted">先選擇納入分析的資產、國家與狀態，再確認這批資料。</p>'+filterHTML()+
+    `<div class="custom-axis"><button class="btn-outline confirm-scope" onclick="confirmAnalysisScope()">${analysisScope?'更新分析資料庫':'確認分析資料庫'}</button><span>目前選取 ${pending} 件</span><small class="muted" role="status">${analysisScope?(dirty?'範圍已修改，按「更新分析資料庫」後套用；下圖仍使用上次確認資料。':'已確認 '+analysisRows().length+' 件，可切換比較指標。'):'尚未確認資料範圍'}</small></div>`+
+    `<fieldset id="comparison-controls" class="comparison-controls" ${analysisScope?'':'disabled'}><legend>2. 選擇比較圖指標</legend><div class="custom-axis"><label>比較指標 <select aria-label="比較指標" onchange="customDimension=this.value;render()">${['country','type','status'].map(k=>`<option value="${k}" ${customDimension===k?'selected':''}>${{status:'各狀態案件比較',country:'各國家／地區案件比較',type:'各資產類型案件比較',...ANALYSIS_LABELS}[k]}</option>`).join('')}</select></label><label>圖表形式 <select aria-label="比較圖形式" onchange="chartModes.custom=this.value;render()"><option value="donut" ${chartModes.custom==='donut'?'selected':''}>甜甜圈圖（占比）</option><option value="bar" ${chartModes.custom==='bar'?'selected':''}>橫向長條圖（件數與占比）</option></select></label></div><p class="chart-note">比較已確認範圍內的案件數與占比；可依國家、資產類型或狀態分析。</p></fieldset>`;
+}
+chartModes.custom='donut';
+function chart(t){
+  const custom=t==='custom',title=custom?customTitle():TYPE_NAMES[t];
+  if(custom&&!analysisScope)return '<article class="panel"><h2>比較圖</h2><div class="empty">請先完成步驟 1，確認分析資料庫，再選擇比較指標。</div></article>';
+  const rows=custom?analysisRows():HUB.filter(r=>r.t===t&&(t!=='patent'||(selected(r)&&(pg!=='patent'||(matchesDrill(r)&&[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(flt.q.toLowerCase()))))));
+  const dimension=custom?customDimension:assetDimensions[t];
+  const label=r=>ANALYSIS_KEYS[dimension]?analysisValue(r,dimension):custom?(customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r)):dimension==='country'?r.c:chartStatus(r);
+  const counts=new Map();
+  if(t==='patent'&&dimension==='status')['審核中','領證中','放棄','專利通過'].forEach(v=>counts.set(v,0));
+  rows.forEach(r=>{const labels=ANALYSIS_KEYS[dimension]?analysisValues(r,dimension):[label(r)];labels.forEach(key=>{if(key!==null)counts.set(key,(counts.get(key)||0)+1);});});
+  const entries=custom?customGroups().map(g=>[g.label,g.rows.length]):[...counts].sort((a,b)=>b[1]-a[1]||String(a[0]).localeCompare(String(b[0]),'zh-Hant')),total=entries.reduce((sum,[,n])=>sum+n,0);
+  const hue=s=>ANALYSIS_KEYS[dimension]?'hsl('+((Math.max(0,CHOICES[dimension].indexOf(s))*137.508+165)%360)+' 52% 42%)':dimension==='country'?countryColor(s):custom?dimensionColor(s):color(s);
+  chartSnapshots[t]={title,dimension,mode:chartModes[t],rows:[...rows],total,entries:entries.map(([label,n])=>({label,n,color:hue(label)})),note:ANALYSIS_KEYS[dimension]?rows.length+' 件專利；'+total+' 分類計次。同案可列入多项，占比以分類計次總數為分母。':t==='patent'&&dimension==='status'?'放棄含失效、撤回；申請中併入審核中。':'',scope:custom?customTitle():TYPE_NAMES[t]+(t==='patent'?'符合篩選案件':'全部案件'),updated:NOW_STR};
+  const action=i=>custom?`openCustomGroup(${i})`:`drillTo('${t}',${JSON.stringify(entries[i][0])},'${dimension}')`;
+  let offset=0;
+  const paths=entries.map(([s,n],i)=>{
+    if(!n)return '';
+    const start=offset;offset+=n/total;
+    const point=a=>[90+72*Math.cos(a*2*Math.PI-Math.PI/2),90+72*Math.sin(a*2*Math.PI-Math.PI/2)];
+    const a=point(start),b=point(offset===1?offset-.000001:offset);
+    return `<path d="M90 90 L${a} A72 72 0 ${n/total>.5?1:0} 1 ${b} Z" fill="${hue(s)}" onclick="${esc(action(i))}"><title>${esc(s)}：${n} 件 · ${(100*n/total).toFixed(1)}%</title></path>`;
+  }).join('');
+  return `<article class="panel"><div class="chart-tools"><button class="btn-outline" onclick="openChartViewer(\'${t}\')" aria-label="放大${esc(title)}">⤢ 放大</button><button class="btn-outline" onclick="openChartExport(\'${t}\')">匯出</button></div><h2 class="chart-title">${esc(title)}</h2>${custom?'':`<label class="asset-dimension">比較指標 <select aria-label="${TYPE_NAMES[t]}比較指標" onchange="assetDimensions['${t}']=this.value;render()"><option value="country" ${dimension==='country'?'selected':''}>國家／地區</option><option value="status" ${dimension==='status'?'selected':''}>狀態</option>${t==='patent'?Object.entries(ANALYSIS_LABELS).map(([k,v])=>`<option value="${k}" ${dimension===k?'selected':''}>${v}</option>`).join(''):''}</select></label>`}<select aria-label="${esc(title)}圖表形式" class="chart-mode" onchange="chartModes['${t}']=this.value;render()"><option value="donut" ${chartModes[t]==='donut'?'selected':''}>甜甜圈圖</option><option value="bar" ${chartModes[t]==='bar'?'selected':''}>橫向長條圖</option></select><div class="muted">${ANALYSIS_KEYS[dimension]?rows.length+' 件專利 · '+total+' 分類計次':total+' 件'} · ${custom?'已確認分析資料庫':(t==='patent'?'符合篩選案件':'全部案件')+' · 依'+(ANALYSIS_LABELS[dimension]||(dimension==='country'?'國家／地區':'狀態'))+'比較'}${rows.length>total?'（另有 '+(rows.length-total)+' 件狀態未對應，請至管理頁檢查）':''}</div>${custom?`<p class="chart-note">依「${{status:'狀態',country:'國家／地區',type:'資產類型',...ANALYSIS_LABELS}[customDimension]}」彙總；占比以 ${total} ${ANALYSIS_KEYS[dimension]?'分類計次':'件案件'}為分母。點圖例查看案件。</p>`:''}${ANALYSIS_KEYS[dimension]?'<p class="chart-note">同案可列入多項；占比以分類計次總數為分母。原始資料保留完整儲存格內容。</p>':''}${t==='patent'&&dimension==='status'?'<small class="muted">放棄含失效、撤回；申請中併入審核中</small>':''}${!total?'<div class="empty">沒有符合條件的案件</div>':chartModes[t]==='donut'?`<svg class="donut" viewBox="0 0 180 180" role="img" aria-label="${esc(title)}分布">${paths}<circle cx="90" cy="90" r="51" fill="white"/><text x="90" y="98" text-anchor="middle">${total}</text></svg>`:''}${entries.map(([s,n],i)=>`<button class="legend-row" onclick="${esc(action(i))}"><i style="background:${hue(s)}"></i><span>${esc(s)}</span><small>${n} 件 · ${total?(100*n/total).toFixed(1):'0.0'}%</small></button>${chartModes[t]==='bar'?`<div class="bar-track"><i style="background:${hue(s)};width:${total?100*n/total:0}%"></i></div>`:''}`).join('')}${custom?customBreakdown():''}</article>`;
+}
+function openCustomGroup(i){
+  const group=customGroups()[i];if(!group)return;
+  showCustomRows(group.label,group.rows);
+}
+function showCustomRows(label,rows){
+  document.getElementById('custom-results').innerHTML='<h2 class="section-title">'+esc(customTitle()+' / '+label)+' · 案件明細 '+rows.length+' 件</h2>'+listTable([...rows].sort(defaultOrder));
+  document.getElementById('custom-results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function customTitle(){
+  return ['country','type','status'].map(k=>{
+    const values=CHOICES[k].filter(v=>(analysisScope||selection)[k].has(v));
+    if(!values.length)return {country:'未選國家',type:'未選資產',status:'未選狀態'}[k];
+    if(values.length===CHOICES[k].length)return {country:'全部國家／地區',type:'全部資產',status:'全部狀態'}[k];
+    return values.map(v=>k==='type'?TYPE_NAMES[v]:v).join('、');
+  }).join(' / ');
+}
+function customGroups(){
+  const groups=new Map(),get=r=>ANALYSIS_KEYS[customDimension]?analysisValue(r,customDimension):customDimension==='country'?r.c:customDimension==='type'?TYPE_NAMES[r.t]:managementStatus(r);
+  analysisRows().forEach(r=>{const labels=ANALYSIS_KEYS[customDimension]?analysisValues(r,customDimension):[get(r)];labels.forEach(label=>{if(!groups.has(label))groups.set(label,[]);groups.get(label).push(r);});});
+  return [...groups].map(([label,rows])=>({label,rows})).sort((a,b)=>b.rows.length-a.rows.length||a.label.localeCompare(b.label,'zh-Hant'));
+}
+function countryColor(label){const i=CHOICES.country.indexOf(label);return 'hsl('+((Math.max(0,i)*137.508+165)%360).toFixed(1)+' 52% 42%)';}
+function dimensionColor(label){
+  if(customDimension==='status')return color(label);
+  const values=CHOICES[customDimension]||(customDimension==='country'?CHOICES.country:Object.values(TYPE_NAMES)),i=values.indexOf(label);
+  return 'hsl('+((Math.max(0,i)*137.508+165)%360).toFixed(1)+' 52% 42%)';
+}
+function customCombinations(){
+  const groups=new Map();
+  analysisRows().forEach(r=>{const labels=[r.c,TYPE_NAMES[r.t],managementStatus(r)],key=JSON.stringify(labels);if(!groups.has(key))groups.set(key,{labels,rows:[]});groups.get(key).rows.push(r);});
+  return [...groups.values()].sort((a,b)=>b.rows.length-a.rows.length||a.labels.join().localeCompare(b.labels.join(),'zh-Hant'));
+}
+function customBreakdown(){
+  const groups=customCombinations(),total=groups.reduce((n,g)=>n+g.rows.length,0);
+  if(!total)return '';
+  return '<details class="custom-breakdown"><summary>國家 × 資產 × 狀態明細（'+groups.length+' 組）</summary><p class="chart-note">件數加總為 '+total+' 件；占比以全部符合條件案件為分母。點選一列查看案件。</p><div class="breakdown-scroll"><table><thead><tr><th>國家</th><th>資產</th><th>狀態</th><th>件數</th><th>占比</th></tr></thead><tbody>'+groups.map((g,i)=>'<tr tabindex="0" onclick="openCustomCombination('+i+')" onkeydown="if(event.key===\'Enter\')openCustomCombination('+i+')">'+g.labels.map(v=>'<td>'+esc(v)+'</td>').join('')+'<td>'+g.rows.length+'</td><td>'+(100*g.rows.length/total).toFixed(1)+'%</td></tr>').join('')+'</tbody></table></div></details>';
+}
+function openCustomCombination(i){const g=customCombinations()[i];if(g)showCustomRows(g.labels.join(' / '),g.rows);}
+function upcomingRows(){
+  const today=new Date(NOW_STR.slice(0,10).replaceAll('/','-')+'T00:00:00Z');
+  const end=new Date(today),day=end.getUTCDate();end.setUTCDate(1);end.setUTCMonth(end.getUTCMonth()+6);
+  const last=new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate();end.setUTCDate(Math.min(day,last));
+  return HUB.filter(r=>dateValue(r)>=+today&&dateValue(r)<=+end&&managementStatus(r)!=='已放棄').sort((a,b)=>dateValue(a)-dateValue(b));
+}
+function listTable(rows){return `<div class="twrap hub-alerts"><table><thead><tr>${['案件名稱','資產類型','國家','狀態','到期日','提醒'].map(s=>'<th>'+s+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')"><td>${esc(r.name)}</td><td>${TYPE_NAMES[r.t]}</td><td>${esc(r.c)}</td><td>${esc(r.s)}</td><td>${esc(r.date||'—')}</td><td>${esc(attention(r)?.[1]||'正常')}</td></tr>`).join('')||'<tr><td colspan="6">沒有符合條件的案件</td></tr>'}</tbody></table></div>`;}
+const COLS={trademark:[['商標名',r=>r.name],['國別',r=>r.c],['申請類別',r=>r.raw['申請類別']||r.raw['類別']],['狀態/進度說明',r=>r.s],['申請案號',r=>r.raw['申請案號']||r.raw['申請號']],['註冊號',r=>r.raw['註冊編號']||r.raw['註冊號']||r.raw['證書號 (進度)']],['使用期限（到期日）',r=>r.date]],patent:[['專利名稱（中文）',r=>r.name],['國別',r=>r.c],['申請案號',r=>r.raw['申請案號']],['專利編號',r=>r.raw['專利編號']],['目前狀態',r=>r.s],['證書到期日',r=>r.date]],registration:[['登記產品名',r=>r.name],['國別',r=>r.c],['登記類別',r=>r.raw['登記類別']],['登記公司',r=>r.raw['登記公司']],['狀態',r=>r.s],['有效期限',r=>r.date]]};
+function management(t){let rows=HUB.filter(r=>r.t===t&&selected(r)&&matchesDrill(r));const q=flt.q.toLowerCase();if(q)rows=rows.filter(r=>[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(q));rows.sort(defaultOrder);if(srt.col!==null){const get=COLS[t][Number(srt.col)]?.[1];if(get)rows.sort((a,b)=>String(get(a)||'').localeCompare(String(get(b)||''),'zh-Hant')*(srt.asc?1:-1));}const pages=Math.ceil(rows.length/pp)||1;cur=Math.min(cur,pages);const visible=rows.slice((cur-1)*pp,cur*pp);return filterHTML()+(t==='patent'?'<div class="hub-grid" style="grid-template-columns:minmax(0,1fr)">'+chart('patent')+'</div>':'')+`<div class="fbar"><input aria-label="搜尋目前案件" value="${esc(flt.q)}" placeholder="搜尋名稱、國家、狀態、案號" oninput="hubLocalSearch(this)"><span class="rcount">共 ${rows.length} 筆</span>${drill?'<button class="btn-outline" onclick="drill=null;render()">清除圖表選取</button>':''}</div><div class="twrap"><table><thead><tr>${COLS[t].map(([name],i)=>`<th onclick="sortBy('${i}')">${name} ↕</th>`).join('')}</tr></thead><tbody>${visible.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')">${COLS[t].map(([,get],i)=>'<td>'+esc(get(r)||'—')+(i===0&&t==='patent'?'<div class="cs">'+esc(r.raw['專利類別']||'')+'</div>':'')+'</td>').join('')}</tr>`).join('')||'<tr><td colspan="7">沒有符合條件的案件</td></tr>'}</tbody></table></div>${mkPager(rows.length,pages)}`;}
+function hubLocalSearch(input){const pos=input.selectionStart;flt.q=input.value;cur=1;render();const next=document.querySelector('[aria-label="搜尋目前案件"]');next.focus();next.setSelectionRange(pos,pos);}
+const legacyRender=render;
+render=function(){const content=document.getElementById('content');document.getElementById('topbar-actions').innerHTML='';const header=`<div class="hub-head"><h1>${PAGE_TITLES[pg]||'搜尋結果'}</h1>${pg==='overview'?`<small>資料更新：${NOW_STR}（台灣時間） · Google Sheets</small>`:''}</div>`;let body='';if(pg==='overview'){const alertRows=upcomingRows();body='<div class="hub-grid">'+[...Object.keys(TYPE_NAMES),'custom'].map(chart).join('')+'</div>'+analysisControls()+'<div id="custom-results"></div><h2 class="section-title">需要注意的案件 · '+alertRows.length+' 件</h2><p class="muted">與期限提醒同步：今天起六個月內到期，不含已放棄、失效及撤回。</p>'+listTable(alertRows);}else if(TYPE_NAMES[pg]){body=management(pg);if(pg!=='patent')document.getElementById('topbar-actions').innerHTML=`<button class="btn-outline" onclick="openExpMo('${pg}')">匯出</button>`;}else if(pg==='alerts'){body='<p class="muted">今天起六個月內到期的有效案件 · '+upcomingRows().length+' 件（不含已放棄、失效及撤回）</p>'+listTable(upcomingRows());}else if(pg==='search'){const rows=searchRows(globalQuery);body='<p class="muted">搜尋全部資產，共 '+rows.length+' 件</p>'+listTable(rows);}else{legacyRender();return;}content.innerHTML=header+body;};
+showPage=function(n){pg=n;cur=1;flt.q='';srt={col:null,asc:true};if(drill&&drill.t!==n)drill=null;document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',(x.getAttribute('onclick')||'').includes("'"+n+"'")));render();};
+function openHub(id){const r=byId.get(id);if(!r)return;lastFocus=document.activeElement;const field=(k,v)=>`<div class="di"><label>${esc(k)}</label><div class="dv">${esc(v||'—')}</div></div>`;const dates=Object.entries(r.raw).filter(([k])=>!k.startsWith('_')&&/日期|期限|使用期間/.test(k));document.getElementById('mt').textContent=r.name;document.getElementById('mb').innerHTML='<section class="drawer-section"><h3>案件摘要</h3><div class="dg">'+field('類型',TYPE_NAMES[r.t])+field('國家',r.c)+field('原始狀態',r.s)+field('案號',r.numbers.trim())+'</div></section><section class="drawer-section"><h3>重要日期</h3><div class="dg">'+field('到期日',r.date)+field('提醒',attention(r)?.[1]||'正常')+dates.map(([k,v])=>field(k,v)).join('')+'</div></section><details class="drawer-section"><summary>完整原始資料</summary><div class="dg">'+Object.entries(r.raw).filter(([k])=>!k.startsWith('_')).map(([k,v])=>field(k,v)).join('')+'</div></details>';document.getElementById('mo').classList.add('open');document.querySelector('#mo .mclose').focus();}
+const oldClose=closeMo;closeMo=function(e){oldClose(e);if(!document.getElementById('mo').classList.contains('open'))lastFocus?.focus();};
+function searchRows(q){q=q.trim().toLowerCase();return q?HUB.filter(r=>[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(q)):[];}
+function searchHub(input){globalQuery=input.value;const rows=searchRows(globalQuery);document.getElementById('hub-results').innerHTML=!globalQuery.trim()?'':rows.slice(0,8).map(r=>`<button onclick="document.getElementById('hub-results').innerHTML='';openHub('${r.id}')">${esc(r.name)}<small>${esc(TYPE_NAMES[r.t]+' · '+r.c+' · '+r.s+' · '+r.numbers.trim())}</small></button>`).join('')+(rows.length?`<button onclick="showPage('search');document.getElementById('hub-results').innerHTML=''">查看全部搜尋結果（${rows.length}）</button>`:'<button disabled>沒有符合的案件</button>');}
+document.querySelector('.brand').innerHTML='<div class="brand-logo">CH BIOTECH</div><div class="brand-title">正瀚生技<br>CH IP Intelligence Hub<br>智財與登記管理</div>';
+document.querySelector('.topbar').insertAdjacentHTML('afterbegin','<div class="hub-search"><input id="hub-search" aria-label="全域搜尋" placeholder="搜尋商標、專利、登記、國家或案號…" oninput="searchHub(this)"><div class="search-pop" id="hub-results"></div></div>');
+document.addEventListener('click',e=>{if(!e.target.closest('.hub-search'))document.getElementById('hub-results').innerHTML='';if(!e.target.closest('.hub-filter'))document.querySelectorAll('.hub-filter[open]').forEach(menu=>menu.open=false);});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeMo();document.getElementById('hub-results').innerHTML='';}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();document.getElementById('hub-search').focus();}});
+// Export receives the same filters as the visible management page.
+const legacyExportRows=exportRows;exportRows=function(){return legacyExportRows().filter(raw=>HUB.some(r=>r.raw===raw&&selected(r)&&matchesDrill(r)));};
+const baseAttention=attention;attention=function(r){const a=baseAttention(r);if(a&&a[0]<5)return a;if(/審核|登記中/.test(r.s))return [5,'進度追蹤'];return a;};
+const baseColor=color;color=function(s){if(/需處理|核駁/.test(s))return '#c95762';if(s==='已完成')return '#178269';if(s==='進行中'||s==='領證中')return '#3976c5';if(/已取證|已取得|專利通過|領證|維持證書/.test(s))return '#178269';if(/審查|審核|申請|辦理|登記中/.test(s))return '#3976c5';if(/放棄|失效|撤回|結案/.test(s))return '#88968f';return baseColor(s);};
+let categoryFilter='all';
+const baseSelected=selected;selected=function(r){const key=pg==='patent'?'專利類別':pg==='registration'?'登記類別':null;return baseSelected(r)&&(!key||categoryFilter==='all'||r.raw[key]===categoryFilter);};
+const viewSelections=new Map();
+const baseShowPage=showPage;showPage=function(n){viewSelections.set(pg,selection);selection=viewSelections.get(n)||Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));if(drill&&drill.t===n)selection=Object.fromEntries(Object.entries(CHOICES).map(([k,v])=>[k,new Set(v)]));categoryFilter='all';baseShowPage(n);};
+const baseResetHub=resetHub;resetHub=function(){categoryFilter='all';flt.q='';cur=1;baseResetHub();};
+const baseHubRender=render;render=function(){baseHubRender();document.querySelectorAll('.hub-grid .panel').forEach(panel=>{const buttons=[...panel.querySelectorAll('.legend-row')];if(!buttons.length)return;const box=document.createElement('div');box.style.cssText='max-height:290px;overflow:auto;padding-right:4px';panel.insertBefore(box,buttons[0]);buttons.forEach(b=>{const bar=b.nextElementSibling?.classList.contains('bar-track')?b.nextElementSibling:null;box.append(b);if(bar)box.append(bar);});});const key=pg==='patent'?'專利類別':null;if(key){const vs=[...new Set(HUB.filter(r=>r.t===pg).map(r=>r.raw[key]).filter(Boolean))];document.querySelector('.fbar')?.insertAdjacentHTML('beforeend',`<select aria-label="${key}" onchange="categoryFilter=this.value;cur=1;render()"><option value="all">所有${key}</option>${vs.map(v=>`<option value="${esc(v)}" ${categoryFilter===v?'selected':''}>${esc(v)}</option>`).join('')}</select>`);}};
+// Chart reports use a snapshot of exactly the displayed analysis.
+const chartSnapshots={};
+let reportSnapshot=null,chartReturnFocus=null;
+const REPORT_STYLE=`body{font:14px Arial,"Microsoft JhengHei",sans-serif;color:#173e35;margin:24px}h1{font-size:22px;overflow-wrap:anywhere}h2{font-size:17px}p{line-height:1.6}.report-svg{display:block;width:320px;max-width:100%;height:auto;margin:20px auto}.report-legend{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #e4ece8;break-inside:avoid}.report-legend i{width:10px;height:10px;border-radius:50%}.report-bar{height:10px;background:#edf3f0;margin-bottom:12px;break-inside:avoid}.report-bar i{height:100%;display:block}table{border-collapse:collapse;width:100%;font-size:11px;table-layout:fixed}th,td{padding:6px;border:1px solid #cddcd5;overflow-wrap:anywhere;vertical-align:top}th{background:#edf4f0}thead{display:table-header-group}tr{break-inside:avoid}.report-graph{max-width:700px;margin:auto}.report-section{margin:24px 0}.print-button{padding:10px 18px;cursor:pointer}@page{size:A4 landscape;margin:12mm}@media print{body{margin:0}.print-button{display:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
+function reportGraph(s){
+  if(!s.total)return '<p>沒有符合條件的案件</p>';
+  let offset=0;
+  const paths=s.entries.filter(e=>e.n).map(e=>{const start=offset;offset+=e.n/s.total;const point=a=>[100+85*Math.cos(a*2*Math.PI-Math.PI/2),100+85*Math.sin(a*2*Math.PI-Math.PI/2)];return `<path d="M100 100 L${point(start)} A85 85 0 ${e.n/s.total>.5?1:0} 1 ${point(offset===1?offset-.000001:offset)} Z" fill="${e.color}"/>`;}).join('');
+  const svg=s.mode==='donut'?`<svg class="report-svg" viewBox="0 0 200 200" role="img" aria-label="${esc(s.title)}"><title>${esc(s.title)}</title>${paths}<circle cx="100" cy="100" r="60" fill="white"/><text x="100" y="108" text-anchor="middle" font-size="25" fill="#173e35">${s.total}</text></svg>`:'';
+  return '<div class="report-graph">'+svg+s.entries.map(e=>`<div class="report-legend"><i style="background:${e.color}"></i><span>${esc(e.label)}</span><span>${e.n} 件 · ${(100*e.n/s.total).toFixed(1)}%</span></div>${s.mode==='bar'?`<div class="report-bar"><i style="background:${e.color};width:${100*e.n/s.total}%"></i></div>`:''}`).join('')+'</div>';
+}
+function chartDialog(){
+  let d=document.getElementById('chart-dialog');
+  if(!d){d=document.createElement('dialog');d.id='chart-dialog';d.setAttribute('aria-labelledby','chart-dialog-title');document.body.append(d);d.addEventListener('click',e=>{if(e.target===d)d.close();});d.addEventListener('close',()=>chartReturnFocus?.focus());}
+  return d;
+}
+function reportHeading(s){return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p class="muted">${esc(s.scope)}<br>依${{country:'國家／地區',status:'狀態',type:'資產類型',...ANALYSIS_LABELS}[s.dimension]}比較 · ${s.total} ${ANALYSIS_KEYS[s.dimension]?'分類計次':'件'} · 資料時間：${esc(s.updated)}</p>${s.note?'<p>'+esc(s.note)+'</p>':''}${s.rows.length>s.total?'<p>另有 '+(s.rows.length-s.total)+' 件未對應圖表分類；完整明細仍保留。</p>':''}`;}
+function openChartViewer(t){
+  if(!chartSnapshots[t])return;chartReturnFocus=document.activeElement;reportSnapshot=chartSnapshots[t];const d=chartDialog();
+  d.innerHTML=`<button class="btn-outline dialog-close" onclick="document.getElementById('chart-dialog').close()">關閉 ×</button>${reportHeading(reportSnapshot)}<button class="btn-outline" onclick="openChartExport()">匯出這張圖</button><div class="chart-enlarged">${reportGraph(reportSnapshot)}</div>`;
+  if(!d.open)d.showModal();
+}
+function reportFields(s){return [...new Set(s.rows.flatMap(r=>Object.keys(r.raw).filter(k=>!k.startsWith('_'))))];}
+function openChartExport(t){
+  if(t){if(!chartSnapshots[t])return;reportSnapshot=chartSnapshots[t];chartReturnFocus=document.activeElement;}
+  if(!reportSnapshot)return;const d=chartDialog(),fields=reportFields(reportSnapshot);
+  d.innerHTML=`<button class="btn-outline dialog-close" onclick="document.getElementById('chart-dialog').close()">關閉 ×</button>${reportHeading(reportSnapshot)}<h3>勾選匯出內容</h3><div class="report-options"><label><input id="report-chart" type="checkbox" checked>圖表（PDF）</label><label><input id="report-summary" type="checkbox" checked>彙總數據：分類、件數、占比</label><label><input id="report-details" type="checkbox">案件詳細資訊</label></div><p class="chart-note">PDF：開啟報表後按「列印／另存 PDF」。CSV：輸出勾選的數據與明細，不包含圖形。</p><details><summary>詳細資訊欄位（基本欄位固定保留，可加選原始欄位）</summary><p>基本欄位：案件名稱、資產類型、國家、原始狀態、到期日。</p><button class="btn-outline" onclick="selectReportFields(true)">全選</button><button class="btn-outline" onclick="selectReportFields(false)">取消全選</button><div class="report-fields">${fields.map((k,i)=>`<label><input type="checkbox" name="report-field" value="${i}">${esc(k)}</label>`).join('')}</div></details><div class="report-actions"><button class="btn-outline" onclick="exportChartReport('pdf')">匯出 PDF</button><button class="btn-outline" onclick="exportChartReport('csv')">下載 CSV</button></div><p id="report-error" role="status"></p>`;
+  if(!d.open)d.showModal();
+}
+function selectReportFields(on){document.querySelectorAll('#chart-dialog input[name="report-field"]').forEach(el=>el.checked=on);}
+function reportTables(s,summary,details,fields){
+  const tables=[];
+  if(summary)tables.push({title:'彙總數據',headers:['分類','件數','占比（%）'],rows:s.entries.map(e=>[e.label,e.n,s.total?(100*e.n/s.total).toFixed(1):'0.0'])});
+  if(details)tables.push({title:'案件詳細資訊',headers:['案件名稱','資產類型','國家','原始狀態','到期日',...fields],rows:s.rows.map(r=>[r.name,TYPE_NAMES[r.t],r.c,r.s,r.date,...fields.map(k=>r.raw[k]??'')])});
+  return tables;
+}
+function reportTableHTML(table){
+  // Split very wide field sets into readable print sections; keep case identity in each.
+  const chunks=[];for(let i=1;i<table.headers.length;i+=7)chunks.push([0,...Array.from({length:Math.min(7,table.headers.length-i)},(_,j)=>i+j)]);
+  return chunks.map((cols,i)=>'<section class="report-section"><h2>'+esc(table.title)+(chunks.length>1?' · 欄位組 '+(i+1):'')+'</h2><table><thead><tr>'+cols.map(k=>'<th>'+esc(table.headers[k])+'</th>').join('')+'</tr></thead><tbody>'+table.rows.map(row=>'<tr>'+cols.map(k=>'<td>'+esc(row[k])+'</td>').join('')+'</tr>').join('')+'</tbody></table></section>').join('');
+}
+function chartCSV(s,tables){
+  const cell=v=>{let text=String(v??'');if(/^[\s]*[=+@-]/.test(text))text="'"+text;return '"'+text.replaceAll('"','""')+'"';};
+  const rows=[['分析範圍',s.scope],['比較指標',s.dimension],['資料時間',s.updated],['圖表案件數',s.total],['分類說明',s.note]];
+  tables.forEach(t=>rows.push([], [t.title],t.headers,...t.rows));
+  return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n');
+}
+function exportChartReport(format){
+  const s=reportSnapshot;if(!s)return;
+  const graph=document.getElementById('report-chart').checked,summary=document.getElementById('report-summary').checked,details=document.getElementById('report-details').checked,error=document.getElementById('report-error');
+  if(!(summary||details||(format==='pdf'&&graph))){error.textContent=format==='csv'?'CSV 請至少勾選彙總數據或案件詳細資訊。':'請至少勾選一項輸出內容。';return;}
+  const all=reportFields(s),fields=[...document.querySelectorAll('#chart-dialog input[name="report-field"]:checked')].map(el=>all[Number(el.value)]).filter(v=>v!==undefined),tables=reportTables(s,summary,details,fields);error.textContent='';
+  if(format==='csv'){const url=URL.createObjectURL(new Blob([chartCSV(s,tables)],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='CH_IP_圖表資料_'+s.updated.slice(0,10).replaceAll('/','-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;}
+  const w=window.open('','_blank');if(!w){error.textContent='請允許此網站開啟彈出式視窗後重試。';return;}
+  w.opener=null;w.document.write('<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(s.title)+' 圖表報告</title><style>'+REPORT_STYLE+'</style></head><body><button class="print-button" onclick="window.print()">列印／另存 PDF</button>'+reportHeading(s)+(graph?reportGraph(s):'')+tables.map(reportTableHTML).join('')+'</body></html>');w.document.close();
+}
+// Registration views: product rows are the counting unit; rate rows remain child records.
+const REG_GROUPS={all:'全部',fert:'肥料／生物刺激素',pgr:'PGR／原體'};
+const REG_LABELS={country:'國家／地區',company:'登記公司',category:'登記類別',status:'進度',deadline:'期限狀態',item:'登記品目',material:'原料',crop:'對象作物',method:'施用方式',dilution:'稀釋倍數',ingredient:'有效成分',form:'劑型',use:'用途／功效大類',site:'作物／使用場所'};
+const regNewState=()=>({group:'all',filters:{},dimension:'status',mode:'bar',drill:null,cardFilter:null});
+const regState={overview:regNewState(),management:regNewState()};
+let regView='products',regRateSearch='',regRateMethod='',regRateUnit='',regRateCrop='',regRateCompany='',regRateCountry='';
+function regContext(){return pg==='overview'?'overview':'management';}
+function regGroup(r){return r.raw._reg_group||(/PGR|Technical Grade/i.test(r.raw['登記類別']||'')?'pgr':'fert');}
+function regSplit(value){let depth=0,part='',out=[];for(const c of String(value||'')){if('（('.includes(c))depth++;if('）)'.includes(c))depth=Math.max(0,depth-1);if(!depth&&'、,;；\n\r'.includes(c)){if(part.trim())out.push(part.trim());part='';}else part+=c;}if(part.trim())out.push(part.trim());return [...new Set(out.length?out:['未填寫'])];}
+function regRates(r){return r.raw._rates||[];}
+function regRateValue(d,k){return k==='dilution'?[d._dilution?d._dilution+'倍':'未填寫']:regSplit(d['Application Method']);}
+function regValues(r,k){
+ const direct={country:r.c,company:r.raw['登記公司'],category:r.raw['登記類別'],status:r.s,deadline:r.raw._deadline_status,item:r.raw['登記品目'],material:r.raw['Raw Materials'],crop:r.raw.Crops,ingredient:r.raw['Active Ingredient(s)'],form:r.raw['Formulation / Product Form'],use:r.raw['Use Type'],site:r.raw['Crops / Use Sites']};
+ if(k==='method'&&regGroup(r)==='pgr')return regSplit(r.raw['Application Method']);
+ if(k==='method'||k==='dilution'){const ds=regRates(r);return ds.length?[...new Set(ds.flatMap(d=>regRateValue(d,k)))]:k==='method'?regSplit(r.raw['Application Method']):['未填寫'];}
+ return ['material','crop','ingredient','use','site'].includes(k)?regSplit(direct[k]):[String(direct[k]||'未填寫').trim()||'未填寫'];
+}
+function regKeys(group){return ['country','company','category','status','deadline',...(group==='fert'?['item','material']:group==='pgr'?['ingredient','form','use']:[])];}
+function regBase(context){const s=regState[context];return HUB.filter(r=>r.t==='registration'&&(s.group==='all'||regGroup(r)===s.group));}
+function regMatch(r,context){
+ const s=regState[context],matches=(k,values)=>s.filters[k]===undefined||values.some(v=>s.filters[k].includes(v));
+ if(!Object.keys(s.filters).filter(k=>!['method','dilution'].includes(k)).every(k=>matches(k,regValues(r,k))))return false;
+ const rateKeys=['method','dilution'].filter(k=>s.filters[k]!==undefined);
+ if(rateKeys.length){const ds=regRates(r);if(ds.length&&regGroup(r)==='fert'){if(!ds.some(d=>rateKeys.every(k=>matches(k,regRateValue(d,k)))))return false;}else if(!rateKeys.every(k=>matches(k,regValues(r,k))))return false;}
+ return !s.drill||regValues(r,s.drill.key).includes(s.drill.value);
+}
+function regRows(context,ignoreCard=false){let rows=regBase(context).filter(r=>regMatch(r,context));if(context==='management'&&flt.q.trim()){const q=flt.q.trim().toLowerCase();rows=rows.filter(r=>[...regVisibleFields(r).map(([,v])=>v),...regKeys(regGroup(r)).flatMap(k=>regValues(r,k))].join(' ').toLowerCase().includes(q));}if(context==='management'&&!ignoreCard&&regState[context].cardFilter){const f=regState[context].cardFilter;if(f==='pending')rows=rows.filter(r=>managementStatus(r)==='進行中');if(f==='due')rows=rows.filter(r=>String(r.raw._deadline_status||'').startsWith('即將到期'));}return rows;}
+function regPrerequisites(k){return k==='country'?[]:k==='company'?['country']:k==='status'?['country','company']:['country','company','status'];}
+function regScopedRows(context,k){const s=regState[context],parents=regPrerequisites(k);return regBase(context).filter(r=>parents.every(parent=>{const selected=s.filters[parent];return selected===undefined||selected.length===0?selected===undefined:regValues(r,parent).some(v=>selected.includes(v));}));}
+function regOptions(context,k){return [...new Set(regScopedRows(context,k).flatMap(r=>regValues(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));}
+function regChangeGroup(context,group){const old=regState[context];regState[context]={...regNewState(),group,mode:old.mode};if(context==='management'){flt.q='';srt={col:null,asc:true};}cur=1;render();}
+function regSyncDependents(context,changed){const s=regState[context];for(const k of ['company','status',...regKeys(s.group).filter(k=>!['country','company','status'].includes(k))]){if(!regPrerequisites(k).includes(changed))continue;const old=s.filters[k];if(old===undefined)continue;const allowed=new Set(regOptions(context,k));const kept=old.filter(v=>allowed.has(v));if(kept.length===0){delete s.filters[k];}else if(kept.length<allowed.size){s.filters[k]=kept;}}}
+function regSyncCompanies(context,k){regSyncDependents(context,k);}
+function regSelect(context,k,i,on){const s=regState[context],options=regOptions(context,k);if(i<0||i>=options.length)return;const set=new Set(s.filters[k]===undefined?options:s.filters[k]);on?set.add(options[i]):set.delete(options[i]);if(options.length&&set.size===options.length)delete s.filters[k];else s.filters[k]=[...set];regSyncDependents(context,k);s.drill=null;cur=1;regRefresh();}
+function regSelectAll(context,k,on){if(on)delete regState[context].filters[k];else regState[context].filters[k]=[];regSyncDependents(context,k);regState[context].drill=null;cur=1;regRefresh();}
+function regRefresh(){const open=[...document.querySelectorAll('[data-reg-menu][open]')].map(n=>n.dataset.regMenu);render();open.forEach(k=>{const n=document.querySelector('[data-reg-menu="'+k+'"]');if(n)n.open=true;});}
+function regSelectedText(k,vs,chosen){if(chosen===undefined)return '全部';if(!chosen.length)return '無可選項';return chosen.join('、');}
+function regFilterSummary(context){const s=regState[context],parts=[];if(context==='management'&&s.cardFilter)parts.push('統計卡片：'+({pending:'登記中',due:'一年內到期'}[s.cardFilter]||'產品紀錄'));for(const k of regKeys(s.group)){const chosen=s.filters[k];if(chosen!==undefined&&chosen.length)parts.push(REG_LABELS[k]+'：'+chosen.join('、'));}return parts.join('｜');}
+function regCardFilter(value){regState.management.cardFilter=value==='products'?null:value;regState.management.drill=null;cur=1;render();}
+function regFilters(){const context='management',s=regState[context];const control=k=>{const vs=regOptions(context,k),chosen=s.filters[k];return `<details class="hub-filter" data-reg-menu="${k}"><summary>${REG_LABELS[k]} · ${regSelectedText(k,vs,chosen)} ▾</summary><div class="hub-options"><button class="btn-outline" onclick="regSelectAll('${context}','${k}',true)">全選</button><button class="btn-outline" onclick="regSelectAll('${context}','${k}',false)">取消全選</button>${!vs.length?'<p class="muted">目前國家、公司與進度條件下沒有可選項目</p>':''}${vs.map((v,i)=>`<label><input type="checkbox" ${chosen===undefined||chosen.includes(v)?'checked':''} onchange="regSelect('${context}','${k}',${i},this.checked)">${esc(v)}</label>`).join('')}</div></details>`;};return '<div class="panel hub-filters">'+['country','company','status'].map(control).join('')+`<button class="btn-outline" onclick="regState.management.filters={};regState.management.drill=null;regState.management.cardFilter=null;flt.q='';cur=1;render()">重設篩選</button></div><details class="panel reg-advanced" data-reg-menu="advanced"><summary>進階篩選${Object.keys(s.filters).filter(k=>!['country','status','company'].includes(k)).length?'（已套用）':''}</summary><div class="hub-filters">${regKeys(s.group).filter(k=>!['country','status','company'].includes(k)).map(control).join('')}</div></details>`;}
+function regGroupSelect(context){const s=regState[context];return `<label>登記分類 <select aria-label="登記分類" onchange="regChangeGroup('${context}',this.value)">${Object.entries(REG_GROUPS).map(([k,v])=>`<option value="${k}" ${s.group===k?'selected':''}>${v}</option>`).join('')}</select></label>`;}
+function regCounts(rows){const valid=v=>v&&!/^(N\/?A|No registration required|—|-|未填寫)$/i.test(v.trim());return {products:rows.length,certs:new Set(rows.filter(r=>valid(String(r.raw['證書/License ID']||''))).map(r=>JSON.stringify([r.c,String(r.raw['證書/License ID']).trim()]))).size,pending:rows.filter(r=>managementStatus(r)==='進行中').length,due:rows.filter(r=>String(r.raw._deadline_status).startsWith('即將到期')).length};}
+function regSummary(rows){const c=regCounts(rows),active=regState.management.cardFilter;return '<div class="ov-grid">'+[['products','產品紀錄',c.products],['pending','登記中',c.pending],['due','一年內到期',c.due]].map(([key,l,n])=>`<button class="card reg-summary-card ${active===key?'is-active':''}" onclick="regCardFilter('${key}')"><span class="card-label">${l}</span><span class="card-value">${n}</span></button>`).join('')+'</div>';}
+function regChart(context){
+ const s=regState[context],rows=regRows(context),counts=new Map();rows.forEach(r=>regValues(r,s.dimension).forEach(v=>counts.set(v,(counts.get(v)||0)+1)));
+ const entries=[...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'zh-Hant')).map(([label,n],i)=>({label,n,color:`hsl(${(i*137.508+165)%360} 52% 42%)`})),total=entries.reduce((n,e)=>n+e.n,0);
+ const filterNote=regFilterSummary(context);const note=`${filterNote?'目前篩選：'+filterNote+'。 ':''}${rows.length} 筆產品紀錄，${total} 分類計次；同一產品在同項目只計一次，跨項目可重複。占比以分類計次為分母；空白與未載明統一為未填寫。原始內容保留於案件詳情。`;
+ const snap={title:'產品登記 · '+REG_GROUPS[s.group],dimension:'reg_'+s.dimension,mode:s.mode,rows:[...rows],total,entries,note,scope:REG_GROUPS[s.group]+(context==='management'?' · 目前篩選與搜尋結果'+(filterNote?' · '+filterNote:''):' · 全部產品紀錄'),updated:NOW_STR};chartSnapshots.registration=snap;
+ const graph=reportGraph(snap),svg=s.mode==='donut'?(graph.match(/<svg[\s\S]*?<\/svg>/)||[''])[0]:'';
+ return `<article class="panel reg-chart"><div class="chart-tools"><button class="btn-outline" onclick="openChartViewer('registration')">⤢ 放大</button><button class="btn-outline" onclick="openChartExport('registration')">匯出圖表</button></div><h2>產品登記</h2><div class="custom-axis">${context==='overview'?regGroupSelect(context):''}<label>比較指標 <select aria-label="產品登記比較指標" onchange="regState.${context}.dimension=this.value;render()">${regKeys(s.group).map(k=>`<option value="${k}" ${s.dimension===k?'selected':''}>${REG_LABELS[k]}</option>`).join('')}</select></label><label>圖表形式 <select onchange="regState.${context}.mode=this.value;render()"><option value="bar" ${s.mode==='bar'?'selected':''}>橫向長條圖</option><option value="donut" ${s.mode==='donut'?'selected':''}>甜甜圈圖</option></select></label></div><p class="chart-note">${note}</p>${svg}${!total?'<div class="empty">沒有符合條件的案件</div>':''}${entries.map((e,i)=>`<button class="legend-row" onclick="regDrill('${context}',${i})"><i style="background:${e.color}"></i><span>${esc(e.label)}</span><small>${e.n} 筆 · ${(100*e.n/total).toFixed(1)}%</small></button>${s.mode==='bar'?`<div class="bar-track"><i style="background:${e.color};width:${100*e.n/total}%"></i></div>`:''}`).join('')}</article>`;
+}
+function regDrill(context,index){const e=chartSnapshots.registration.entries[index];if(!e)return;const src=regState[context];regState.management={...src,filters:Object.fromEntries(Object.entries(src.filters).map(([k,v])=>[k,[...v]])),drill:{key:src.dimension,value:e.label}};regView='products';if(context==='overview')showPage('registration');else{cur=1;render();}document.getElementById('reg-table')?.scrollIntoView({behavior:'smooth',block:'start'});}
+const REG_RATE_FIELDS=[['Crop / Crop Group','作物／適用範圍'],['Application Method','施用方式'],['Application Timing','施用時機'],['Rate Value / Range','用量／原始描述'],['Rate Unit','單位'],['Dilution / Concentration','稀釋倍數／濃度'],['Frequency / Interval','頻率／間隔'],['PHI / Restrictions','採收前間隔／限制'],['Source / Notes','來源／備註']];
+function regRateTable(items,withProduct=true){return `<div class="twrap reg-rates"><table><thead><tr>${(withProduct?['產品／國家／公司']:[]).concat(REG_RATE_FIELDS.map(x=>x[1])).map(v=>'<th>'+v+'</th>').join('')}</tr></thead><tbody>${items.map(({r,d})=>`<tr>${withProduct?`<td><button class="btn-outline" onclick="openHub('${r.id}')">${esc(r.name)}</button><div class="cs">${esc(r.c)} · ${esc(r.raw['登記公司'])}</div></td>`:''}${REG_RATE_FIELDS.map(([k])=>'<td>'+esc(d[k]||'—')+'</td>').join('')}</tr>`).join('')||`<tr><td colspan="10">目前沒有用量明細</td></tr>`}</tbody></table></div>`;}
+function regAllRateItems(){return HUB.filter(r=>r.t==='registration'&&regGroup(r)==='pgr').flatMap(r=>regRates(r).map(d=>({r,d})));}
+function regRateItems(){return regAllRateItems().filter(({r,d})=>(!regRateCountry||r.c===regRateCountry)&&(!regRateCompany||r.raw['登記公司']===regRateCompany)&&(!regRateMethod||regSplit(d['Application Method']).includes(regRateMethod))&&(!regRateUnit||d['Rate Unit']===regRateUnit)&&(!regRateCrop||regSplit(d['Crop / Crop Group']).includes(regRateCrop))&&(!regRateSearch||[r.name,r.c,r.raw['登記公司'],...Object.values(d)].join(' ').toLowerCase().includes(regRateSearch.toLowerCase())));}
+function regRateQuery(){const all=regAllRateItems(),items=regRateItems(),select=(label,key,values,current)=>`<label>${label} <select onchange="${key}=this.value;render()"><option value="">全部</option>${[...new Set(values)].filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hant')).map(v=>`<option value="${esc(v)}" ${current===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`;return `<h2 class="section-title">PGR 用量查詢</h2><p class="chart-note">明細保留原始單位；同產品可能有不同作物、施用時機與用量限制。未填明細的產品不列於此，仍保留在產品清單。</p><div class="fbar"><input aria-label="搜尋用量" value="${esc(regRateSearch)}" placeholder="搜尋產品、作物、施用時機…" onchange="regRateSearch=this.value;render()">${select('國家','regRateCountry',all.map(x=>x.r.c),regRateCountry)}${select('公司','regRateCompany',all.map(x=>x.r.raw['登記公司']),regRateCompany)}${select('作物／適用範圍','regRateCrop',all.flatMap(x=>regSplit(x.d['Crop / Crop Group'])),regRateCrop)}${select('施用方式','regRateMethod',all.flatMap(x=>regSplit(x.d['Application Method'])),regRateMethod)}${select('單位','regRateUnit',all.map(x=>x.d['Rate Unit']),regRateUnit)}<button class="btn-outline" onclick="regRateSearch=regRateCountry=regRateCompany=regRateCrop=regRateMethod=regRateUnit='';render()">重設</button><button class="btn-outline" onclick="regExportRates()">匯出查詢明細 CSV</button></div><p class="muted">${items.length} 筆施用明細 · ${new Set(items.map(x=>x.r.id)).size} 筆產品紀錄</p>${regRateTable(items)}`;}
+function regProductTable(rows){let ordered=[...rows].sort(defaultOrder);if(srt.col!==null){const get=COLS.registration[Number(srt.col)]?.[1];if(get)ordered.sort((a,b)=>String(get(a)||'').localeCompare(String(get(b)||''),'zh-Hant')*(srt.asc?1:-1));}const pages=Math.ceil(ordered.length/pp)||1;cur=Math.min(cur,pages);return `<div class="twrap" id="reg-table"><table><thead><tr>${COLS.registration.map(([label],i)=>`<th onclick="sortBy('${i}')">${label} ↕</th>`).join('')}</tr></thead><tbody>${ordered.slice((cur-1)*pp,cur*pp).map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')">${COLS.registration.map(([,get])=>'<td>'+esc(get(r)||'—')+'</td>').join('')}</tr>`).join('')||'<tr><td colspan="6">沒有符合條件的案件</td></tr>'}</tbody></table></div>${mkPager(rows.length,pages)}`;}
+function regManagement(){regView='products';const s=regState.management;const nav=`<div class="reg-tabs">${Object.entries(REG_GROUPS).map(([k,v])=>`<button class="${regView==='products'&&s.group===k?'btn-primary':'btn-outline'}" onclick="regView='products';regChangeGroup('management','${k}')">${v}</button>`).join('')}</div>`;const rows=regRows('management'),summaryRows=regRows('management',true);return nav+regSummary(summaryRows)+regFilters()+`<div class="fbar"><input aria-label="搜尋目前案件" value="${esc(flt.q)}" placeholder="搜尋產品、公司、證號或資料內容" oninput="hubLocalSearch(this)"><span class="rcount">${rows.length} 筆產品紀錄</span>${s.drill?`<button class="btn-outline" onclick="regState.management.drill=null;render()">清除圖表選取：${esc(s.drill.value)}</button>`:''}</div><div class="hub-grid reg-chart-grid">${regChart('management')}</div>`+regProductTable(rows);}
+function regExportCSV(headers,rows,name){const safe=v=>{let x=String(v??'');if(/^[\s]*[=+@-]/.test(x))x="'"+x;return '"'+x.replaceAll('"','""')+'"';};dlCSV('\uFEFF'+[headers,...rows].map(r=>r.map(safe).join(',')).join('\r\n'),name);}
+function regExportProducts(){const rows=regRows('management'),fields=[...new Set((rows.length?rows:regBase('management')).flatMap(r=>regVisibleFields(r).map(([k])=>k)))];regExportCSV(fields,rows.map(r=>fields.map(k=>r.raw[k]||'')),'產品登記_目前篩選.csv');}
+function regExportRates(){const items=regRateItems();regExportCSV(['產品','國家','登記公司','證號','明細ID',...REG_RATE_FIELDS.map(x=>x[1])],items.map(({r,d})=>[r.name,r.c,r.raw['登記公司'],r.raw['證書/License ID'],d['Rate Detail ID'],...REG_RATE_FIELDS.map(([k])=>d[k]||'')]),'PGR_用量查詢.csv');}
+// Display-only dictionary: source cells are kept intact for audit and export.
+const REG_ALIASES={
+ company:{'jabco':'Jabco, LLC','jabco, llc':'Jabco, LLC'},
+ ingredient:{
+  'iba':'吲哚丁酸（IBA）','indole-3-butyric acid (iba)':'吲哚丁酸（IBA）','3-indolebutyric acid (iba)':'吲哚丁酸（IBA）',
+  'gaba':'γ-胺基丁酸（GABA）','gamma aminobutyric acid (gaba)':'γ-胺基丁酸（GABA）',
+  'kinetin':'激動素（Kinetin）','cytokinin (as kinetin)':'激動素（Kinetin）',
+  'gibberellic acid (ga3)':'吉貝素（GA3）','choline chloride':'氯化膽鹼','salicylic acid':'水楊酸',
+  'chitosan':'幾丁聚醣（Chitosan）','chitin':'幾丁質（Chitin）','l-glutamic acid':'L-麩胺酸',
+  'potassium silicate':'矽酸鉀','1-triacontanol':'1-三十烷醇','triacontanol':'1-三十烷醇（1-Triacontanol）'},
+ material:{'feather meal':'羽毛粉','fish scale':'魚鱗','hydrolyzed feather meal':'水解羽毛粉','keratin hydrolysate':'角蛋白水解物','molasses':'糖蜜','choline chloride':'氯化膽鹼','citric acid':'檸檬酸','oilseed extract':'油籽萃取物'},
+ crop:{'coffee':'咖啡','rice':'水稻','tea':'茶葉','fruit trees':'果樹','vegetables':'蔬菜','fruits and vegetables':'蔬果','general':'通用','black pepper and vegetables':['黑胡椒','蔬菜'],'cereal and tuber crops: rice':'水稻','corn':'玉米','potatoes':'馬鈴薯','cassava…':'樹薯等','organic':'待確認（Organic 非作物名稱）'},
+ site:{'標籤列示之作物類別（詳標籤表格）':'依標籤列示作物','標籤列示作物（詳標籤表格）':'依標籤列示作物','標籤列示作物':'依標籤列示作物'},
+ form:{'soluble concentrate':'可溶性濃縮劑','liquid formulation':'液態製劑','soluble powder':'可溶性粉劑','technical grade active ingredient':'技術級原體'},
+ method:{'葉面噴施，得與登記除草劑桶混':['葉面噴施','桶混施用'],'葉面噴施，必要時搭配登記除草劑混用':['葉面噴施','桶混施用'],'葉面噴施／桶混':['葉面噴施','桶混施用']}
+};
+const REG_USE_GROUPS={
+ '果實與生長調節':['生長調節／促進','生殖／產量／品質'],
+ '促進新根生長、降低移植休克':['生長調節／促進','逆境耐受'],
+ '植物生長調節、促進生長':['生長調節／促進'],
+ '促進根與芽生長、花果生長、降低移植休克':['生長調節／促進','生殖／產量／品質','逆境耐受'],
+ '僅供配製 PGR':['配製原料'],
+ '植物生長調節':['生長調節／促進'],
+ '改善鹽鹼／鈉質土壤植物生長':['生長調節／促進','逆境耐受'],
+ '促進生殖生長、授粉、礦物吸收與產量品質':['生殖／產量／品質','養分吸收／利用'],
+ '提升光合效率、代謝活性與逆境耐受':['光合／代謝','逆境耐受'],
+ '促進生長、可與除草劑搭配使用':['生長調節／促進','除草劑搭配'],
+ '提升食品作物逆境耐受':['逆境耐受'],
+ '促進根、芽、營養生長及花果生長':['生長調節／促進','生殖／產量／品質'],
+ '促進根、芽、營養生長及逆境耐受':['生長調節／促進','逆境耐受'],
+ '促進根、芽生長、病原耐受與非生物逆境耐受':['生長調節／促進','病害相關','逆境耐受'],
+ '促進根與芽生長、光合、逆境耐受、礦物吸收與產量品質':['生長調節／促進','光合／代謝','逆境耐受','養分吸收／利用','生殖／產量／品質'],
+ '促進芽與花發育':['生長調節／促進','生殖／產量／品質'],
+ '僅供配製 PGR／miticide':['配製原料'],
+ '抑制空氣／土壤病害、提升逆境耐受':['病害相關','逆境耐受'],
+ '提升作物生長與逆境耐受':['生長調節／促進','逆境耐受'],
+ '種子處理、促進種子萌發與幼苗建立':['生長調節／促進']
+};
+function regCanonical(k,value){const text=String(value??'').trim().replace(/\s+/g,' ');if(!text||/^(?:未填寫|未載明|未填|未提供|[-—–－]+)$/.test(text))return ['未填寫'];const key=text.replace(/[（]/g,'(').replace(/[）]/g,')').toLowerCase();const mapped=REG_ALIASES[k]?.[key]??REG_ALIASES[k]?.[text];return mapped===undefined?[text]:Array.isArray(mapped)?mapped:[mapped];}
+function regCanonicalList(k,values){return [...new Set(values.flatMap(v=>regCanonical(k,v)))];}
+const regRawValues=regValues;regValues=function(r,k){if(k==='use'){const raw=String(r.raw['Use Type']||'').trim();if(regCanonical(k,raw)[0]==='未填寫')return ['未填寫'];return REG_USE_GROUPS[raw]||['其他用途（待分類）'];}return regCanonicalList(k,regRawValues(r,k));};
+const regRawRateValue=regRateValue;regRateValue=function(d,k){return regCanonicalList(k,regRawRateValue(d,k));};
+
+const regPreviousChart=chart;chart=function(t){return t==='registration'?regChart('overview'):regPreviousChart(t);};
+const regPreviousManagement=management;management=function(t){return t==='registration'?regManagement():regPreviousManagement(t);};
+// Hidden registration dimensions stay in source data but are not presented or exported.
+const REG_HIDDEN_FIELDS=new Set(['crops','crops / use sites','crop / crop group','application method','application timing','recommended rate','rate summary','rate detail id','適用作物','對象作物','施用方式','施用方法','施用時期']);
+function regVisibleFields(r){return Object.entries(r.raw).filter(([k])=>!k.startsWith('_')&&!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase()));}
+const REG_FULL_LABELS={'Active Ingredient(s)':'有效成分（原文）','Active Ingredient (%)':'有效成分含量','Formulation / Product Form':'劑型（原文）','Use Type':'用途／功效（原文）','Raw Materials':'原料（原文）','N-P-K (%)':'N-P-K（%）','Organic Matter (%)':'有機質（%）','Others':'其他資訊','Source / Notes':'來源／備註','Label':'標籤資料'};
+function regOtherDetails(r){const fields=REG_RATE_FIELDS.filter(([k])=>!REG_HIDDEN_FIELDS.has(k.toLowerCase())&&!(regGroup(r)==='fert'&&k==='Source / Notes'));const rows=regRates(r);if(!rows.length)return '';return '<h3 style="margin-top:16px">用量與其他登記資訊</h3><div class="twrap reg-rates"><table><thead><tr>'+fields.map(([,v])=>'<th>'+v+'</th>').join('')+'</tr></thead><tbody>'+rows.map(d=>'<tr>'+fields.map(([k])=>'<td>'+esc(d[k]||'—')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';}
+const regPreviousOpen=openHub;openHub=function(id){const r=byId.get(id);if(!r||r.t!=='registration'){regPreviousOpen(id);return;}lastFocus=document.activeElement;const field=(k,v)=>'<div class="di"><label>'+esc(k)+'</label><div class="dv">'+esc(v||'—')+'</div></div>';document.getElementById('mt').textContent=r.name;document.getElementById('mb').innerHTML='<section class="drawer-section"><h3>案件摘要</h3><div class="dg">'+field('國家／地區',r.c)+field('登記公司',regValues(r,'company').join('、'))+field('進度',r.s)+field('證號',r.raw['證書/License ID'])+field('證書有效期限',r.date)+'</div></section><details class="drawer-section"><summary>完整資料</summary><div class="dg">'+regVisibleFields(r).map(([k,v])=>field(REG_FULL_LABELS[k]||k,v)).join('')+'</div><h3 style="margin-top:16px">分析分類</h3><div class="dg">'+regKeys(regGroup(r)).filter(k=>!['country','status','deadline'].includes(k)).map(k=>field(REG_LABELS[k],regValues(r,k).join('、'))).join('')+'</div>'+regOtherDetails(r)+'</details>';document.getElementById('mo').classList.add('open');document.querySelector('#mo .mclose').focus();};
+const regOriginalReportFields=reportFields;reportFields=function(s){const fields=regOriginalReportFields(s);return s.rows.some(r=>r.t==='registration')?fields.filter(k=>!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase())):fields;};
+
+const regPreviousHeading=reportHeading;reportHeading=function(s){if(!s.dimension.startsWith('reg_'))return regPreviousHeading(s);return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p>${esc(s.scope)} · 依${REG_LABELS[s.dimension.slice(4)]}比較 · ${s.rows.length} 筆產品紀錄<br>${esc(s.note)}<br>資料時間：${esc(s.updated)}</p>`;};
+const regPreviousRender=render;render=function(){regPreviousRender();if(pg==='registration')document.getElementById('topbar-actions').innerHTML=regView==='rates'?'<button class="btn-outline" onclick="regExportRates()">匯出用量 CSV</button>':'<button class="btn-outline" onclick="regExportProducts()">匯出目前產品 CSV</button>';};
+
+document.getElementById('nba').textContent=upcomingRows().length;
+render();
+'''
+
+
+# ─── Main ─────────────────────────────────────────────────────────────────
+parser = argparse.ArgumentParser(description='正瀚生技智財管理資料產生器')
+parser.add_argument(
+    '--source', choices=['google', 'local'],
+    default=os.environ.get('CH_IP_SOURCE', 'google'),
+    help='資料來源：google（預設）或 local（本機 Excel）',
+)
+parser.add_argument(
+    '--data-dir', default=os.environ.get('CH_IP_DATA_DIR', 'data'),
+    help='local 模式的 Excel 資料夾，預設為 ./data',
+)
+parser.add_argument('--trademark-file', help='local 模式指定商標 Excel 路徑')
+parser.add_argument('--patent-file', help='local 模式指定專利 Excel 路徑')
+parser.add_argument('--registration-file', help='local 模式指定產品登記 Excel 路徑')
+args = parser.parse_args()
+
+if args.source == 'local':
+    print('Reading from local Excel files...')
+    tm_path = local_file(args.data_dir, '商標', args.trademark_file)
+    pt_path = local_file(args.data_dir, '專利', args.patent_file)
+    rg_path = local_file(args.data_dir, '登記', args.registration_file)
+    tm_data = read_local_xlsx('商標', tm_path)
+    pt_data = read_local_xlsx('專利', pt_path)
+    rg_data = read_local_xlsx('登記', rg_path)
+else:
+    print('Downloading from Google Sheets...')
+    tm_data  = download_excel('商標', URLS['trademark'])
+    pt_data  = download_excel('專利', URLS['patent'])
+    rg_data  = download_excel('登記', URLS['registration'])
+
+print('Processing...')
+trademark    = process_trademark(read_trademark_rows(tm_data))
+patent       = process_patent(read_excel_rows(pt_data))
+registration = process_registration(read_registration_rows(rg_data))
+print(f'  商標:{len(trademark)} 專利:{len(patent)} 登記:{len(registration)}')
+
+print('Building HTML...')
+html = build_html(trademark, patent, registration)
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_dir = os.path.dirname(script_dir) if os.path.basename(script_dir) == 'scripts' else script_dir
+out = os.path.join(repo_dir, 'index.html')
+with open(out, 'w', encoding='utf-8') as f:
+    f.write(html)
+print(f'Done: {len(html):,} bytes → {out}')

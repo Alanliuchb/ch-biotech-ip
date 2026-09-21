@@ -220,7 +220,7 @@ button{font:inherit;cursor:pointer}.btn-primary{background:var(--green)}.btn-out
     <div class="nav-section" style="margin-top:10px">設定</div>
     <div class="nav-item" onclick="showPage('sync',this)"><span style="flex:1">⇄ 資料與同步</span></div>
   </nav>
-  <div class="sidebar-footer">同步：2026/09/21 14:10<br>© 正瀚生技 CH BIOTECH</div>
+  <div class="sidebar-footer">同步：2026/09/21 14:21<br>© 正瀚生技 CH BIOTECH</div>
 </aside>
 <main id="main">
   <div class="topbar">
@@ -280,8 +280,8 @@ async function unlockApp(e) {
   }
 }
 const RAW = JSON.parse(document.getElementById('raw-data').textContent);
-const REG_HIDE = new Set(["raw materials", "others", "n-p-k", "organic matter", "crops"]);
-const NOW_STR = '2026/09/21 14:10';
+const REG_HIDE = new Set(["others", "organic matter", "raw materials", "n-p-k", "crops"]);
+const NOW_STR = '2026/09/21 14:21';
 const SHEET_NAMES = {
   trademark: '商標進度管理表',
   patent:    '專利進度管理表',
@@ -341,7 +341,7 @@ function render() {
   }
   else if (pg === 'alerts')    el.innerHTML = renderAlerts();
   else if (pg === 'sync')      el.innerHTML = `<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
-<div class="di"><label>最後同步時間</label><div class="dv">2026/09/21 14:10</div></div>
+<div class="di"><label>最後同步時間</label><div class="dv">2026/09/21 14:21</div></div>
 <div class="di"><label>來源</label><div class="dv">Google Sheets 自動同步</div></div>
 <div class="di"><label>商標案件</label><div class="dv">192 筆</div></div>
 <div class="di"><label>專利案件</label><div class="dv">152 筆</div></div>
@@ -1143,7 +1143,7 @@ function regMatch(r,context){
 }
 function regRows(context,ignoreCard=false){let rows=regBase(context).filter(r=>regMatch(r,context));if(context==='management'&&flt.q.trim()){const q=flt.q.trim().toLowerCase();rows=rows.filter(r=>[...regVisibleFields(r).map(([,v])=>v),...regKeys(regGroup(r)).flatMap(k=>regValues(r,k))].join(' ').toLowerCase().includes(q));}if(context==='management'&&!ignoreCard&&regState[context].cardFilter){const f=regState[context].cardFilter;if(f==='pending')rows=rows.filter(r=>managementStatus(r)==='進行中');if(f==='due')rows=rows.filter(r=>String(r.raw._deadline_status||'').startsWith('即將到期'));}return rows;}
 function regPrerequisites(k){return k==='country'?[]:k==='company'?['country']:k==='status'?['country','company']:['country','company','status'];}
-function regScopedRows(context,k){const s=regState[context];return regBase(context).filter(r=>Object.entries(s.filters).every(([selectedKey,selectedValues])=>selectedKey===k||selectedValues===undefined||selectedValues.length===0||regValues(r,selectedKey).some(v=>selectedValues.includes(v)));}
+function regScopedRows(context,k){const s=regState[context];return regBase(context).filter(r=>Object.entries(s.filters).every(([selectedKey,selectedValues])=>selectedKey===k||selectedValues===undefined||selectedValues.length===0||regValues(r,selectedKey).some(v=>selectedValues.includes(v))));}
 function regOptions(context,k){return [...new Set(regScopedRows(context,k).flatMap(r=>regValues(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));}
 function regChangeGroup(context,group){const old=regState[context];regState[context]={...regNewState(),group,mode:old.mode};if(context==='management'){flt.q='';srt={col:null,asc:true};}cur=1;render();}
 function regSyncDependents(context,changed){const s=regState[context];for(const k of Object.keys(s.filters)){if(k===changed)continue;const old=s.filters[k],allowed=new Set(regOptions(context,k)),kept=old.filter(v=>allowed.has(v));if(!kept.length||!allowed.size)delete s.filters[k];else if(kept.length<old.length)s.filters[k]=kept;}}

@@ -421,6 +421,7 @@ def build_html(trademark, patent, registration):
     pt_c = len(patent)
     rg_c = len(registration)
     reg_hide_js = json.dumps(list(REG_HIDE))
+    reg_states_js = json.dumps(list(US_STATES), ensure_ascii=False)
 
     css = r'''
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1258,7 +1259,7 @@ render();
 </script>
 </body>
 </html>'''
-    return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', HUB_JS + '\n</script>')
+    return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', HUB_JS.replace('__REG_US_STATES__', reg_states_js) + '\n</script>')
 
 HUB_CSS = r'''
 .reg-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.reg-summary-card{display:block;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}.reg-summary-card.is-active{border-color:#176d59;box-shadow:0 0 0 2px #176d5933}.reg-summary-card .card-label,.reg-summary-card .card-value{display:block}.reg-advanced{margin-bottom:12px}.reg-advanced>summary{cursor:pointer;font-weight:600}.reg-advanced .hub-filters{margin-top:12px}.reg-chart-grid{grid-template-columns:minmax(0,1fr)}.reg-chart select{max-width:100%}.reg-chart .custom-axis{align-items:flex-start}.reg-chart .custom-axis label{display:flex;flex-direction:column;gap:5px;max-width:100%}.reg-rates td{white-space:normal;min-width:140px;max-width:260px;overflow-wrap:anywhere}.reg-rates{max-height:60vh}.reg-chart .report-svg{max-width:230px}.reg-advanced .hub-options{z-index:8}
@@ -1548,7 +1549,7 @@ function exportChartReport(format){
 // Registration views: product rows are the counting unit; rate rows remain child records.
 const REG_GROUPS={all:'全部',fert:'肥料／生物刺激素',pgr:'PGR／原體'};
 const REG_LABELS={country:'國家／地區',company:'登記公司',category:'登記類別',status:'進度',deadline:'期限狀態',item:'登記品目',material:'原料',state:'登記州',crop:'對象作物',method:'施用方式',dilution:'稀釋倍數',ingredient:'有效成分',form:'劑型',use:'用途／功效大類',site:'作物／使用場所'};
-const REG_US_STATES={json.dumps(list(US_STATES), ensure_ascii=False)};
+const REG_US_STATES=__REG_US_STATES__;
 const REG_US_STATE_SET=new Set(REG_US_STATES);
 const regNewState=()=>({group:'all',filters:{},dimension:'status',mode:'bar',drill:null,cardFilter:null});
 const regState={overview:regNewState(),management:regNewState()};

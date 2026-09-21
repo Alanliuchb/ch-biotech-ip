@@ -22,6 +22,21 @@ SHEET_NAMES = {
 # 產品登記：已從 Excel 刪除的肥料登記欄位，不顯示在案件明細
 REG_HIDE = {'crops', 'n-p-k', 'organic matter', 'raw materials', 'others'}
 
+# 美國肥料登記州欄位。Excel 的州欄位值保留在原始資料中，另整理成
+# _registration_states，供前端顯示、統計與篩選；不把 50 個欄位誤當成一般明細欄位。
+US_STATES = (
+    'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado',
+    'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho',
+    'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana',
+    'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota',
+    'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada',
+    'New Hampshire', 'New Jersey', 'New Mexico', 'New York',
+    'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon',
+    'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
+    'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington',
+    'West Virginia', 'Wisconsin', 'Wyoming',
+)
+
 # 分析欄位：移除舊版 AI_ 顯示前綴，並不再輸出人工確認欄位。
 def normalize_analysis_fields(record):
     cleaned = {}
@@ -334,6 +349,15 @@ def read_registration_rows(data):
             record['_reg_group'] = group
             record['_record_id'] = f'{group}-{index+1}'
             record['_rates'] = []
+            if group == 'fert':
+                # 僅將有值的州納入登記州清單；值（如 X、LPI）一併保留，
+                # 讓案件明細可以呈現「州別 + 登記狀態」而非只有州名。
+                record['_registration_states'] = [
+                    {'state': state, 'status': str(record.get(state, '')).strip()}
+                    for state in US_STATES
+                    if str(record.get(state, '')).strip()
+                    and str(record.get(state, '')).strip().lower() not in {'-', '—', 'n/a', 'na'}
+                ]
             if group == 'pgr':
                 for rid in filter(None, re.split(r'[;；\n]+', record.get('Rate Detail ID', ''))):
                     rid = rid.strip()
@@ -1441,7 +1465,7 @@ function upcomingRows(){
   return HUB.filter(r=>dateValue(r)>=+today&&dateValue(r)<=+end&&managementStatus(r)!=='已放棄').sort((a,b)=>dateValue(a)-dateValue(b));
 }
 function listTable(rows){return `<div class="twrap hub-alerts"><table><thead><tr>${['案件名稱','資產類型','國家','狀態','到期日','提醒'].map(s=>'<th>'+s+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')"><td>${esc(r.name)}</td><td>${TYPE_NAMES[r.t]}</td><td>${esc(r.c)}</td><td>${esc(r.s)}</td><td>${esc(r.date||'—')}</td><td>${esc(attention(r)?.[1]||'正常')}</td></tr>`).join('')||'<tr><td colspan="6">沒有符合條件的案件</td></tr>'}</tbody></table></div>`;}
-const COLS={trademark:[['商標名',r=>r.name],['國別',r=>r.c],['申請類別',r=>r.raw['申請類別']||r.raw['類別']],['狀態/進度說明',r=>r.s],['申請案號',r=>r.raw['申請案號']||r.raw['申請號']],['註冊號',r=>r.raw['註冊編號']||r.raw['註冊號']||r.raw['證書號 (進度)']],['使用期限（到期日）',r=>r.date]],patent:[['專利名稱（中文）',r=>r.name],['國別',r=>r.c],['申請案號',r=>r.raw['申請案號']],['專利編號',r=>r.raw['專利編號']],['目前狀態',r=>r.s],['證書到期日',r=>r.date]],registration:[['登記產品名',r=>r.name],['國別',r=>r.c],['登記類別',r=>r.raw['登記類別']],['登記公司',r=>r.raw['登記公司']],['狀態',r=>r.s],['有效期限',r=>r.date]]};
+const COLS={trademark:[['商標名',r=>r.name],['國別',r=>r.c],['申請類別',r=>r.raw['申請類別']||r.raw['類別']],['狀態/進度說明',r=>r.s],['申請案號',r=>r.raw['申請案號']||r.raw['申請號']],['註冊號',r=>r.raw['註冊編號']||r.raw['註冊號']||r.raw['證書號 (進度)']],['使用期限（到期日）',r=>r.date]],patent:[['專利名稱（中文）',r=>r.name],['國別',r=>r.c],['申請案號',r=>r.raw['申請案號']],['專利編號',r=>r.raw['專利編號']],['目前狀態',r=>r.s],['證書到期日',r=>r.date]],registration:[['登記產品名',r=>r.name],['國別',r=>r.c],['登記類別',r=>r.raw['登記類別']],['登記公司',r=>r.raw['登記公司']],['登記州',r=>regStateText(r)],['狀態',r=>r.s],['有效期限',r=>r.date]]};
 function management(t){let rows=HUB.filter(r=>r.t===t&&selected(r)&&matchesDrill(r));const q=flt.q.toLowerCase();if(q)rows=rows.filter(r=>[r.name,r.c,r.s,r.numbers].join(' ').toLowerCase().includes(q));rows.sort(defaultOrder);if(srt.col!==null){const get=COLS[t][Number(srt.col)]?.[1];if(get)rows.sort((a,b)=>String(get(a)||'').localeCompare(String(get(b)||''),'zh-Hant')*(srt.asc?1:-1));}const pages=Math.ceil(rows.length/pp)||1;cur=Math.min(cur,pages);const visible=rows.slice((cur-1)*pp,cur*pp);return filterHTML()+((t==='patent'||t==='trademark')?'<div class="hub-grid" style="grid-template-columns:minmax(0,1fr)">'+chart(t)+'</div>':'')+`<div class="fbar"><input aria-label="搜尋目前案件" value="${esc(flt.q)}" placeholder="搜尋名稱、國家、狀態、案號" oninput="hubLocalSearch(this)"><span class="rcount">共 ${rows.length} 筆</span>${drill?'<button class="btn-outline" onclick="drill=null;render()">清除圖表選取</button>':''}</div><div class="twrap"><table><thead><tr>${COLS[t].map(([name],i)=>`<th onclick="sortBy('${i}')">${name} ↕</th>`).join('')}</tr></thead><tbody>${visible.map(r=>`<tr tabindex="0" onclick="openHub('${r.id}')" onkeydown="if(event.key==='Enter')openHub('${r.id}')">${COLS[t].map(([,get],i)=>'<td>'+esc(get(r)||'—')+(i===0&&t==='patent'?'<div class="cs">'+esc(r.raw['專利類別']||'')+'</div>':'')+'</td>').join('')}</tr>`).join('')||'<tr><td colspan="7">沒有符合條件的案件</td></tr>'}</tbody></table></div>${mkPager(rows.length,pages)}`;}
 function hubLocalSearch(input){const pos=input.selectionStart;flt.q=input.value;cur=1;render();const next=document.querySelector('[aria-label="搜尋目前案件"]');next.focus();next.setSelectionRange(pos,pos);}
 const legacyRender=render;
@@ -1523,7 +1547,9 @@ function exportChartReport(format){
 }
 // Registration views: product rows are the counting unit; rate rows remain child records.
 const REG_GROUPS={all:'全部',fert:'肥料／生物刺激素',pgr:'PGR／原體'};
-const REG_LABELS={country:'國家／地區',company:'登記公司',category:'登記類別',status:'進度',deadline:'期限狀態',item:'登記品目',material:'原料',crop:'對象作物',method:'施用方式',dilution:'稀釋倍數',ingredient:'有效成分',form:'劑型',use:'用途／功效大類',site:'作物／使用場所'};
+const REG_LABELS={country:'國家／地區',company:'登記公司',category:'登記類別',status:'進度',deadline:'期限狀態',item:'登記品目',material:'原料',state:'登記州',crop:'對象作物',method:'施用方式',dilution:'稀釋倍數',ingredient:'有效成分',form:'劑型',use:'用途／功效大類',site:'作物／使用場所'};
+const REG_US_STATES={json.dumps(list(US_STATES), ensure_ascii=False)};
+const REG_US_STATE_SET=new Set(REG_US_STATES);
 const regNewState=()=>({group:'all',filters:{},dimension:'status',mode:'bar',drill:null,cardFilter:null});
 const regState={overview:regNewState(),management:regNewState()};
 let regView='products',regRateSearch='',regRateMethod='',regRateUnit='',regRateCrop='',regRateCompany='',regRateCountry='';
@@ -1531,14 +1557,18 @@ function regContext(){return pg==='overview'?'overview':'management';}
 function regGroup(r){return r.raw._reg_group||(/PGR|Technical Grade/i.test(r.raw['登記類別']||'')?'pgr':'fert');}
 function regSplit(value){let depth=0,part='',out=[];for(const c of String(value||'')){if('（('.includes(c))depth++;if('）)'.includes(c))depth=Math.max(0,depth-1);if(!depth&&'、,;；\n\r'.includes(c)){if(part.trim())out.push(part.trim());part='';}else part+=c;}if(part.trim())out.push(part.trim());return [...new Set(out.length?out:['未填寫'])];}
 function regRates(r){return r.raw._rates||[];}
+function regStateItems(r){if(regGroup(r)!=='fert'||!/美國|USA/i.test(String(r.c||r.raw['國別']||'')))return [];return Array.isArray(r.raw._registration_states)?r.raw._registration_states.filter(x=>x&&x.state):[];}
+function regStateValues(r){return regStateItems(r).map(x=>x.state);}
+function regStateText(r){const items=regStateItems(r);return items.length?items.map(x=>x.status&&x.status!=='X'?`${x.state}（${x.status}）`:x.state).join('、'):'—';}
 function regRateValue(d,k){return k==='dilution'?[d._dilution?d._dilution+'倍':'未填寫']:regSplit(d['Application Method']);}
 function regValues(r,k){
- const direct={country:r.c,company:r.raw['登記公司'],category:r.raw['登記類別'],status:r.s,deadline:r.raw._deadline_status,item:r.raw['登記品目'],material:r.raw['Raw Materials'],crop:r.raw.Crops,ingredient:r.raw['Active Ingredient(s)'],form:r.raw['Formulation / Product Form'],use:r.raw['Use Type'],site:r.raw['Crops / Use Sites']};
+ const direct={country:r.c,company:r.raw['登記公司'],category:r.raw['登記類別'],status:r.s,deadline:r.raw._deadline_status,item:r.raw['登記品目'],material:r.raw['Raw Materials'],state:regStateValues(r),crop:r.raw.Crops,ingredient:r.raw['Active Ingredient(s)'],form:r.raw['Formulation / Product Form'],use:r.raw['Use Type'],site:r.raw['Crops / Use Sites']};
+ if(k==='state')return direct.state.length?direct.state:(regGroup(r)==='fert'&&/美國|USA/i.test(String(r.c||r.raw['國別']||''))?['未填寫']:[]);
  if(k==='method'&&regGroup(r)==='pgr')return regSplit(r.raw['Application Method']);
  if(k==='method'||k==='dilution'){const ds=regRates(r);return ds.length?[...new Set(ds.flatMap(d=>regRateValue(d,k)))]:k==='method'?regSplit(r.raw['Application Method']):['未填寫'];}
  return ['material','crop','ingredient','use','site'].includes(k)?regSplit(direct[k]):[String(direct[k]||'未填寫').trim()||'未填寫'];
 }
-function regKeys(group){return ['country','company','category','status','deadline',...(group==='fert'?['item','material']:group==='pgr'?['ingredient','form','use']:[])];}
+function regKeys(group){return ['country','company','category','status','deadline',...(group==='fert'?['item','material','state']:group==='pgr'?['ingredient','form','use']:[])];}
 function regBase(context){const s=regState[context];return HUB.filter(r=>r.t==='registration'&&(s.group==='all'||regGroup(r)===s.group));}
 function regMatch(r,context){
  const s=regState[context],matches=(k,values)=>s.filters[k]===undefined||values.some(v=>s.filters[k].includes(v));
@@ -1549,10 +1579,10 @@ function regMatch(r,context){
 }
 function regRows(context,ignoreCard=false){let rows=regBase(context).filter(r=>regMatch(r,context));if(context==='management'&&flt.q.trim()){const q=flt.q.trim().toLowerCase();rows=rows.filter(r=>[...regVisibleFields(r).map(([,v])=>v),...regKeys(regGroup(r)).flatMap(k=>regValues(r,k))].join(' ').toLowerCase().includes(q));}if(context==='management'&&!ignoreCard&&regState[context].cardFilter){const f=regState[context].cardFilter;if(f==='pending')rows=rows.filter(r=>managementStatus(r)==='進行中');if(f==='due')rows=rows.filter(r=>String(r.raw._deadline_status||'').startsWith('即將到期'));}return rows;}
 function regPrerequisites(k){return k==='country'?[]:k==='company'?['country']:k==='status'?['country','company']:['country','company','status'];}
-function regScopedRows(context,k){const s=regState[context],parents=regPrerequisites(k);return regBase(context).filter(r=>parents.every(parent=>{const selected=s.filters[parent];return selected===undefined||selected.length===0?selected===undefined:regValues(r,parent).some(v=>selected.includes(v));}));}
+function regScopedRows(context,k){const s=regState[context];return regBase(context).filter(r=>Object.entries(s.filters).every(([selectedKey,selectedValues])=>selectedKey===k||selectedValues===undefined||selectedValues.length===0||regValues(r,selectedKey).some(v=>selectedValues.includes(v)));}
 function regOptions(context,k){return [...new Set(regScopedRows(context,k).flatMap(r=>regValues(r,k)))].sort((a,b)=>a.localeCompare(b,'zh-Hant'));}
 function regChangeGroup(context,group){const old=regState[context];regState[context]={...regNewState(),group,mode:old.mode};if(context==='management'){flt.q='';srt={col:null,asc:true};}cur=1;render();}
-function regSyncDependents(context,changed){const s=regState[context];for(const k of ['company','status',...regKeys(s.group).filter(k=>!['country','company','status'].includes(k))]){if(!regPrerequisites(k).includes(changed))continue;const old=s.filters[k];if(old===undefined)continue;const allowed=new Set(regOptions(context,k));const kept=old.filter(v=>allowed.has(v));if(kept.length===0){delete s.filters[k];}else if(kept.length<allowed.size){s.filters[k]=kept;}}}
+function regSyncDependents(context,changed){const s=regState[context];for(const k of Object.keys(s.filters)){if(k===changed)continue;const old=s.filters[k],allowed=new Set(regOptions(context,k)),kept=old.filter(v=>allowed.has(v));if(!kept.length||!allowed.size)delete s.filters[k];else if(kept.length<old.length)s.filters[k]=kept;}}
 function regSyncCompanies(context,k){regSyncDependents(context,k);}
 function regSelect(context,k,i,on){const s=regState[context],options=regOptions(context,k);if(i<0||i>=options.length)return;const set=new Set(s.filters[k]===undefined?options:s.filters[k]);on?set.add(options[i]):set.delete(options[i]);if(options.length&&set.size===options.length)delete s.filters[k];else s.filters[k]=[...set];regSyncDependents(context,k);s.drill=null;cur=1;regRefresh();}
 function regSelectAll(context,k,on){if(on)delete regState[context].filters[k];else regState[context].filters[k]=[];regSyncDependents(context,k);regState[context].drill=null;cur=1;regRefresh();}
@@ -1630,11 +1660,11 @@ const regPreviousChart=chart;chart=function(t){return t==='registration'?regChar
 const regPreviousManagement=management;management=function(t){return t==='registration'?regManagement():regPreviousManagement(t);};
 // Hidden registration dimensions stay in source data but are not presented or exported.
 const REG_HIDDEN_FIELDS=new Set(['crops','crops / use sites','crop / crop group','application method','application timing','recommended rate','rate summary','rate detail id','適用作物','對象作物','施用方式','施用方法','施用時期']);
-function regVisibleFields(r){return Object.entries(r.raw).filter(([k])=>!k.startsWith('_')&&!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase()));}
+function regVisibleFields(r){return Object.entries(r.raw).filter(([k])=>!k.startsWith('_')&&!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase())&&!REG_US_STATE_SET.has(k.trim()));}
 const REG_FULL_LABELS={'Active Ingredient(s)':'有效成分（原文）','Active Ingredient (%)':'有效成分含量','Formulation / Product Form':'劑型（原文）','Use Type':'用途／功效（原文）','Raw Materials':'原料（原文）','N-P-K (%)':'N-P-K（%）','Organic Matter (%)':'有機質（%）','Others':'其他資訊','Source / Notes':'來源／備註','Label':'標籤資料'};
 function regOtherDetails(r){const fields=REG_RATE_FIELDS.filter(([k])=>!REG_HIDDEN_FIELDS.has(k.toLowerCase())&&!(regGroup(r)==='fert'&&k==='Source / Notes'));const rows=regRates(r);if(!rows.length)return '';return '<h3 style="margin-top:16px">用量與其他登記資訊</h3><div class="twrap reg-rates"><table><thead><tr>'+fields.map(([,v])=>'<th>'+v+'</th>').join('')+'</tr></thead><tbody>'+rows.map(d=>'<tr>'+fields.map(([k])=>'<td>'+esc(d[k]||'—')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';}
-const regPreviousOpen=openHub;openHub=function(id){const r=byId.get(id);if(!r||r.t!=='registration'){regPreviousOpen(id);return;}lastFocus=document.activeElement;const field=(k,v)=>'<div class="di"><label>'+esc(k)+'</label><div class="dv">'+esc(v||'—')+'</div></div>';document.getElementById('mt').textContent=r.name;document.getElementById('mb').innerHTML='<section class="drawer-section"><h3>案件摘要</h3><div class="dg">'+field('國家／地區',r.c)+field('登記公司',regValues(r,'company').join('、'))+field('進度',r.s)+field('證號',r.raw['證書/License ID'])+field('證書有效期限',r.date)+'</div></section><details class="drawer-section"><summary>完整資料</summary><div class="dg">'+regVisibleFields(r).map(([k,v])=>field(REG_FULL_LABELS[k]||k,v)).join('')+'</div><h3 style="margin-top:16px">分析分類</h3><div class="dg">'+regKeys(regGroup(r)).filter(k=>!['country','status','deadline'].includes(k)).map(k=>field(REG_LABELS[k],regValues(r,k).join('、'))).join('')+'</div>'+regOtherDetails(r)+'</details>';document.getElementById('mo').classList.add('open');document.querySelector('#mo .mclose').focus();};
-const regOriginalReportFields=reportFields;reportFields=function(s){const fields=regOriginalReportFields(s);return s.rows.some(r=>r.t==='registration')?fields.filter(k=>!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase())):fields;};
+const regPreviousOpen=openHub;openHub=function(id){const r=byId.get(id);if(!r||r.t!=='registration'){regPreviousOpen(id);return;}lastFocus=document.activeElement;const field=(k,v)=>'<div class="di"><label>'+esc(k)+'</label><div class="dv">'+esc(v||'—')+'</div></div>';document.getElementById('mt').textContent=r.name;document.getElementById('mb').innerHTML='<section class="drawer-section"><h3>案件摘要</h3><div class="dg">'+field('國家／地區',r.c)+field('登記公司',regValues(r,'company').join('、'))+field('登記州',regStateText(r))+field('進度',r.s)+field('證號',r.raw['證書/License ID'])+field('證書有效期限',r.date)+'</div></section><details class="drawer-section"><summary>完整資料</summary><div class="dg">'+regVisibleFields(r).map(([k,v])=>field(REG_FULL_LABELS[k]||k,v)).join('')+'</div><h3 style="margin-top:16px">分析分類</h3><div class="dg">'+regKeys(regGroup(r)).filter(k=>!['country','status','deadline'].includes(k)).map(k=>field(REG_LABELS[k],k==='state'?regStateText(r):regValues(r,k).join('、'))).join('')+'</div>'+regOtherDetails(r)+'</details>';document.getElementById('mo').classList.add('open');document.querySelector('#mo .mclose').focus();};
+const regOriginalReportFields=reportFields;reportFields=function(s){const fields=regOriginalReportFields(s);return s.rows.some(r=>r.t==='registration')?fields.filter(k=>!REG_HIDDEN_FIELDS.has(k.trim().toLowerCase())&&!REG_US_STATE_SET.has(k.trim())):fields;};
 
 const regPreviousHeading=reportHeading;reportHeading=function(s){if(!s.dimension.startsWith('reg_'))return regPreviousHeading(s);return `<h2 id="chart-dialog-title">${esc(s.title)}</h2><p>${esc(s.scope)} · 依${REG_LABELS[s.dimension.slice(4)]}比較 · ${s.rows.length} 筆產品紀錄<br>${esc(s.note)}<br>資料時間：${esc(s.updated)}</p>`;};
 const regPreviousRender=render;render=function(){regPreviousRender();if(pg==='registration')document.getElementById('topbar-actions').innerHTML=regView==='rates'?'<button class="btn-outline" onclick="regExportRates()">匯出用量 CSV</button>':'<button class="btn-outline" onclick="regExportProducts()">匯出目前產品 CSV</button>';};

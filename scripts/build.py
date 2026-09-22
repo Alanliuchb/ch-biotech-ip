@@ -574,6 +574,8 @@ body.locked>aside,body.locked>main,body.locked>.mo{display:none!important}
 .mode2-tbl th,.mode2-tbl td{border:1px solid #e0e6ef;padding:6px 10px;text-align:center}
 .mode2-tbl th{background:#f7f9fd;font-weight:600}
 .mode2-tbl .rc{text-align:left;font-weight:500}
+/* Registration chart uses the full available width and can be resized from its lower-right corner. */
+.reg-chart-grid{grid-template-columns:minmax(0,1fr)!important}.reg-chart{width:100%;min-width:360px;max-width:100%;resize:horizontal;overflow:auto;position:relative}.reg-chart::after{content:'⋰';position:absolute;right:7px;bottom:3px;color:#8aa69d;font-size:18px;line-height:14px;pointer-events:none}
 '''
 
     sync_section = f'''<div class="sc"><h3>⇄ 資料同步狀態</h3><div class="dg" style="margin-top:10px">
@@ -1298,6 +1300,8 @@ button{font:inherit;cursor:pointer}.btn-primary{background:var(--green)}.btn-out
 @media(max-width:700px){.hub-grid{grid-template-columns:1fr}.panel{padding:18px}.content{padding:18px}}
 @media(max-width:900px){#sidebar{width:100%;min-width:0}.brand{display:block;padding:12px 18px}.brand-logo{font-size:18px}.brand-sub{display:none}.brand-title{margin:4px 0}.nav-item{margin:0;min-height:44px}.topbar{padding:10px 14px}.hub-head{align-items:flex-start}}
 @media(max-width:600px){.content{padding:12px}.hub-head{display:block}.hub-head h1{font-size:22px;margin-bottom:6px}.hub-filters{gap:6px}.hub-options{position:fixed;left:12px;right:12px;top:220px;width:auto}.hub-search input{font-size:16px}.dg{grid-template-columns:1fr}#mo .modal{max-width:100vw;border-radius:0}.hub-alerts td{font-size:12px}}
+/* Registration chart uses the full available width and can be resized from its lower-right corner. */
+.reg-chart-grid{grid-template-columns:minmax(0,1fr)!important}.reg-chart{width:100%;min-width:360px;max-width:100%;resize:horizontal;overflow:auto;position:relative}.reg-chart::after{content:'⋰';position:absolute;right:7px;bottom:3px;color:#8aa69d;font-size:18px;line-height:14px;pointer-events:none}
 '''
 
 HUB_JS = r'''

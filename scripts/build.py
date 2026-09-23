@@ -37,6 +37,114 @@ US_STATES = (
     'West Virginia', 'Wisconsin', 'Wyoming',
 )
 
+US_STATE_FIPS = {
+    '01':'Alabama','02':'Alaska','04':'Arizona','05':'Arkansas','06':'California','08':'Colorado',
+    '09':'Connecticut','10':'Delaware','12':'Florida','13':'Georgia','15':'Hawaii','16':'Idaho',
+    '17':'Illinois','18':'Indiana','19':'Iowa','20':'Kansas','21':'Kentucky','22':'Louisiana',
+    '23':'Maine','24':'Maryland','25':'Massachusetts','26':'Michigan','27':'Minnesota',
+    '28':'Mississippi','29':'Missouri','30':'Montana','31':'Nebraska','32':'Nevada',
+    '33':'New Hampshire','34':'New Jersey','35':'New Mexico','36':'New York','37':'North Carolina',
+    '38':'North Dakota','39':'Ohio','40':'Oklahoma','41':'Oregon','42':'Pennsylvania',
+    '44':'Rhode Island','45':'South Carolina','46':'South Dakota','47':'Tennessee','48':'Texas',
+    '49':'Utah','50':'Vermont','51':'Virginia','53':'Washington','54':'West Virginia',
+    '55':'Wisconsin','56':'Wyoming',
+}
+US_ATLAS_URL = 'https://cdn.jsdelivr.net/npm/us-atlas@3/states-albers-10m.json'
+
+
+def build_us_state_shapes():
+    """Download Census-derived state boundaries and convert TopoJSON to compact SVG paths."""
+    request = urllib.request.Request(US_ATLAS_URL, headers={'User-Agent': 'CH-Biotech-IP/1.0'})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            topology = json.loads(response.read().decode('utf-8'))
+    except Exception as exc:
+        raise RuntimeError(f'無法取得美國州界地圖資料：{exc}') from exc
+
+    transform = topology.get('transform') or {}
+    scale = transform.get('scale', [1, 1])
+    translate = transform.get('translate', [0, 0])
+    arc_cache = {}
+
+    def arc_points(index):
+        reverse = index < 0
+        key = ~index if reverse else index
+        if key not in arc_cache:
+            x = y = 0
+            points = []
+            for dx, dy in topology['arcs'][key]:
+                x += dx
+                y += dy
+                points.append((x * scale[0] + translate[0], y * scale[1] + translate[1]))
+            arc_cache[key] = points
+        points = arc_cache[key]
+        return list(reversed(points)) if reverse else points
+
+    def join_ring(arc_ids):
+        points = []
+        for arc_id in arc_ids:
+            part = arc_points(arc_id)
+            points.extend(part if not points else part[1:])
+        return points
+
+    states = {}
+    extents = []
+    for geometry in topology['objects']['states']['geometries']:
+        code = str(geometry.get('id', '')).zfill(2)
+        name = US_STATE_FIPS.get(code)
+        if not name:
+            continue
+        arcs = geometry['arcs']
+        polygons = [arcs] if geometry['type'] == 'Polygon' else arcs
+        rings = [[join_ring(ring) for ring in polygon] for polygon in polygons]
+        all_points = [point for polygon in rings for ring in polygon for point in ring]
+        if not all_points:
+            continue
+        extents.extend(all_points)
+        outer_rings = [polygon[0] for polygon in rings if polygon and polygon[0]]
+        largest = max(outer_rings, key=lambda ring: abs(sum(
+            ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1]
+            for i in range(len(ring))
+        )))
+        area2 = sum(largest[i][0] * largest[(i + 1) % len(largest)][1] - largest[(i + 1) % len(largest)][0] * largest[i][1] for i in range(len(largest)))
+        if area2:
+            cx = sum((largest[i][0] + largest[(i + 1) % len(largest)][0]) * (largest[i][0] * largest[(i + 1) % len(largest)][1] - largest[(i + 1) % len(largest)][0] * largest[i][1]) for i in range(len(largest))) / (3 * area2)
+            cy = sum((largest[i][1] + largest[(i + 1) % len(largest)][1]) * (largest[i][0] * largest[(i + 1) % len(largest)][1] - largest[(i + 1) % len(largest)][0] * largest[i][1]) for i in range(len(largest))) / (3 * area2)
+        else:
+            cx = sum(p[0] for p in largest) / len(largest)
+            cy = sum(p[1] for p in largest) / len(largest)
+        states[name] = {'rings': rings, 'anchor': [cx, cy]}
+
+    if len(states) != 50:
+        raise RuntimeError(f'美國州界資料不完整：取得 {len(states)} 州，預期 50 州')
+    xmin = min(p[0] for p in extents); xmax = max(p[0] for p in extents)
+    ymin = min(p[1] for p in extents); ymax = max(p[1] for p in extents)
+    width, height, pad = 975, 610, 18
+    factor = min((width - 2 * pad) / (xmax - xmin), (height - 2 * pad) / (ymax - ymin))
+    used_w, used_h = (xmax - xmin) * factor, (ymax - ymin) * factor
+    ox, oy = (width - used_w) / 2, (height - used_h) / 2
+
+    def project(point):
+        return [round(ox + (point[0] - xmin) * factor, 1), round(oy + (point[1] - ymin) * factor, 1)]
+
+    output = {}
+    northeast_label_y = {
+        'Vermont': 130, 'New Hampshire': 156, 'Massachusetts': 182,
+        'Connecticut': 208, 'Rhode Island': 234, 'New Jersey': 260,
+        'Delaware': 286, 'Maryland': 312,
+    }
+    for name, state in states.items():
+        commands = []
+        for polygon in state['rings']:
+            for ring in polygon:
+                pts = [project(point) for point in ring]
+                if len(pts) > 2:
+                    commands.append('M' + 'L'.join(f'{x},{y}' for x, y in pts) + 'Z')
+        anchor = project(state['anchor'])
+        label = [953, northeast_label_y[name]] if name in northeast_label_y else anchor
+        output[name] = {'d': ''.join(commands), 'label': label, 'anchor': anchor}
+    return output
+
 # 分析欄位：移除舊版 AI_ 顯示前綴，並不再輸出人工確認欄位。
 def normalize_analysis_fields(record):
     cleaned = {}
@@ -422,6 +530,7 @@ def build_html(trademark, patent, registration):
     rg_c = len(registration)
     reg_hide_js = json.dumps(list(REG_HIDE))
     reg_states_js = json.dumps(list(US_STATES), ensure_ascii=False)
+    us_state_shapes_js = json.dumps(build_us_state_shapes(), ensure_ascii=False, separators=(',', ':')).replace('</', '<' + chr(92) + '/')
 
     css = r'''
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1263,11 +1372,12 @@ render();
 </script>
 </body>
 </html>'''
-    return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', HUB_JS.replace('__REG_US_STATES__', reg_states_js) + '\n</script>')
+    hub_js = HUB_JS.replace('__REG_US_STATES__', reg_states_js).replace('__REG_US_STATE_SHAPES__', us_state_shapes_js)
+    return html.replace('</head>', '<style>' + HUB_CSS + '</style></head>', 1).replace('render();\n</script>', hub_js + '\n</script>')
 
 HUB_CSS = r'''
 .reg-us-map text{font-size:18px}.reg-map-report .reg-us-map-wrap{max-width:920px;margin:18px auto}.reg-map-report .reg-us-map{width:100%;min-width:0}.reg-map-report .reg-us-map text{font-size:18px}
-.reg-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.reg-summary-card{display:block;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}.reg-summary-card.is-active{border-color:#176d59;box-shadow:0 0 0 2px #176d5933}.reg-summary-card .card-label,.reg-summary-card .card-value{display:block}.reg-advanced{margin-bottom:12px}.reg-advanced>summary{cursor:pointer;font-weight:600}.reg-advanced .hub-filters{margin-top:12px}.reg-chart-grid{grid-template-columns:minmax(0,1fr)}.reg-chart select{max-width:100%}.reg-chart .custom-axis{align-items:flex-start}.reg-chart .custom-axis label{display:flex;flex-direction:column;gap:5px;max-width:100%}.reg-rates td{white-space:normal;min-width:140px;max-width:260px;overflow-wrap:anywhere}.reg-rates{max-height:60vh}.reg-chart .report-svg{max-width:230px}.reg-advanced .hub-options{z-index:8}.reg-us-map-wrap{overflow:hidden;margin:10px 0 14px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#f7fbf9,#fff);padding:10px}.reg-us-map{display:block;width:100%;min-width:0;height:auto}.reg-us-map .state-tile{stroke:#fff;stroke-width:1.5;cursor:pointer;transition:filter .15s,stroke-width .15s}.reg-us-map .state-tile:hover,.reg-us-map .state-tile:focus{filter:brightness(.88);stroke:#173e35;stroke-width:3;outline:none}.reg-us-map text{font-size:10px;fill:#173e35;pointer-events:none;font-weight:700}.reg-map-legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px;color:#617a73}.reg-map-legend i{display:block;width:150px;height:10px;border-radius:99px;background:linear-gradient(90deg,#e8f1ed,#176d59)}
+.reg-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.reg-summary-card{display:block;width:100%;text-align:left;cursor:pointer;color:inherit;font:inherit}.reg-summary-card.is-active{border-color:#176d59;box-shadow:0 0 0 2px #176d5933}.reg-summary-card .card-label,.reg-summary-card .card-value{display:block}.reg-advanced{margin-bottom:12px}.reg-advanced>summary{cursor:pointer;font-weight:600}.reg-advanced .hub-filters{margin-top:12px}.reg-chart-grid{grid-template-columns:minmax(0,1fr)}.reg-chart select{max-width:100%}.reg-chart .custom-axis{align-items:flex-start}.reg-chart .custom-axis label{display:flex;flex-direction:column;gap:5px;max-width:100%}.reg-rates td{white-space:normal;min-width:140px;max-width:260px;overflow-wrap:anywhere}.reg-rates{max-height:60vh}.reg-chart .report-svg{max-width:230px}.reg-advanced .hub-options{z-index:8}.reg-us-map-wrap{overflow:hidden;margin:10px 0 14px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#f7fbf9,#fff);padding:clamp(8px,1.5vw,18px)}.reg-us-map{display:block;width:100%;height:auto;overflow:visible}.reg-us-map .reg-state-shape{stroke:#fff;stroke-width:1.25;stroke-linejoin:round;vector-effect:non-scaling-stroke;transition:fill .15s,filter .15s}.reg-us-map .reg-state-shape.is-active{stroke:#fff;stroke-width:1.5}.reg-us-map .reg-state-shape.is-registered{stroke:#fff;stroke-width:1.15}.reg-us-map .reg-state-label{pointer-events:none}.reg-us-map .reg-state-label.is-active{cursor:pointer;pointer-events:auto}.reg-us-map .reg-state-label.is-active:hover text,.reg-us-map .reg-state-label.is-active:focus text{fill:#071e29;stroke-width:3.5}.reg-us-map .reg-state-label:focus{outline:none}.reg-us-map text{font-family:Arial,sans-serif;font-weight:700;fill:#163844;paint-order:stroke;stroke:#fff;stroke-width:2.7;stroke-linejoin:round;pointer-events:none}.reg-us-map .state-abbr{font-size:12px}.reg-us-map .state-count{font-size:11px;font-weight:800}.reg-map-legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin-top:10px;font-size:13px;color:#4d676f}.reg-map-key{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}.reg-map-key i{display:inline-block;width:15px;height:15px;border:1px solid #aebfc2;border-radius:3px;background:var(--swatch)}.reg-map-hint{margin-left:auto;color:#60767b}.reg-detail-map .reg-us-map-wrap{max-width:100%}@media(max-width:600px){.reg-map-hint{width:100%;margin-left:0}.reg-us-map .state-abbr{font-size:14px}.reg-us-map .state-count{font-size:12px}}
 
 .chart-tools{display:flex;justify-content:flex-end;gap:6px;margin-bottom:12px}.chart-tools button{font-size:12px;padding:5px 9px}#chart-dialog{width:min(1000px,94vw);max-height:90dvh;overflow:auto;border:1px solid #d8e6df;border-radius:16px;padding:24px;color:#173e35}#chart-dialog::backdrop{background:#082c2866}.dialog-close{float:right}.chart-enlarged{max-width:760px;margin:20px auto}.report-svg{display:block;width:360px;max-width:100%;height:auto;margin:20px auto}.report-legend{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e2ede6}.report-legend i{width:10px;height:10px;border-radius:50%}.report-bar{height:12px;background:#edf3f0;margin-bottom:14px}.report-bar i{display:block;height:100%}.report-options,.report-actions{display:flex;gap:20px;flex-wrap:wrap;margin:20px 0}.report-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:20px 0}.report-fields label{overflow-wrap:anywhere}#report-error{color:#a63232}
 .reg-us-map text{font-size:18px}.reg-map-report .reg-us-map-wrap{max-width:920px;margin:18px auto}.reg-map-report .reg-us-map{width:100%;min-width:0}.reg-map-report .reg-us-map text{font-size:18px}
@@ -1560,6 +1670,7 @@ function exportChartReport(format){
 const REG_GROUPS={all:'全部',fert:'肥料／生物刺激素',pgr:'PGR／原體'};
 const REG_LABELS={country:'國家／地區',company:'登記公司',category:'登記類別',status:'進度',deadline:'期限狀態',item:'登記品目',material:'原料',state:'登記州',crop:'對象作物',method:'施用方式',dilution:'稀釋倍數',ingredient:'有效成分',form:'劑型',use:'用途／功效大類',site:'作物／使用場所'};
 const REG_US_STATES=__REG_US_STATES__;
+const REG_US_STATE_SHAPES=__REG_US_STATE_SHAPES__;
 const REG_US_STATE_SET=new Set(REG_US_STATES);
 const regNewState=()=>({group:'all',filters:{},dimension:'status',mode:'bar',drill:null,cardFilter:null});
 const regState={overview:regNewState(),management:regNewState()};
@@ -1571,13 +1682,13 @@ function regRates(r){return r.raw._rates||[];}
 function regStateItems(r){if(regGroup(r)!=='fert'||!/美國|USA/i.test(String(r.c||r.raw['國別']||'')))return [];const stored=Array.isArray(r.raw._registration_states)?r.raw._registration_states.filter(x=>x&&x.state):[];if(stored.length)return stored;return REG_US_STATES.filter(state=>{const v=String(r.raw[state]||'').trim();return v&&!/^(?:-|—|N\/A|NA)$/i.test(v);}).map(state=>({state,status:String(r.raw[state]||'').trim()}));}
 function regStateValues(r){return regStateItems(r).map(x=>x.state);}
 function regStateText(r){const items=regStateItems(r);return items.length?items.map(x=>x.status&&x.status!=='X'?`${x.state}（${x.status}）`:x.state).join('、'):'—';}
-const REG_STATE_POS={WA:[0,0],OR:[0,1],CA:[0,2],ID:[1,0],NV:[1,1],UT:[1,2],AZ:[1,3],MT:[2,0],WY:[2,1],CO:[2,2],NM:[2,3],ND:[3,0],SD:[3,1],NE:[3,2],KS:[3,3],OK:[3,4],TX:[3,5],MN:[4,0],IA:[4,1],MO:[4,2],AR:[4,3],LA:[4,4],WI:[5,0],IL:[5,1],MS:[5,3],AL:[5,4],MI:[6,0],IN:[6,1],KY:[6,2],TN:[6,3],GA:[6,4],FL:[6,5],OH:[7,1],WV:[7,2],NC:[7,3],SC:[7,4],PA:[8,1],VA:[8,2],MD:[8,3],NY:[9,1],NJ:[9,2],DE:[9,3],VT:[10,1],NH:[10,0],CT:[10,2],MA:[11,1],RI:[11,2],ME:[11,0],AK:[0,6],HI:[2,6]};
 const REG_STATE_ABBR={Alabama:'AL',Alaska:'AK',Arizona:'AZ',Arkansas:'AR',California:'CA',Colorado:'CO',Connecticut:'CT',Delaware:'DE',Florida:'FL',Georgia:'GA',Hawaii:'HI',Idaho:'ID',Illinois:'IL',Indiana:'IN',Iowa:'IA',Kansas:'KS',Kentucky:'KY',Louisiana:'LA',Maine:'ME',Maryland:'MD',Massachusetts:'MA',Michigan:'MI',Minnesota:'MN',Mississippi:'MS',Missouri:'MO',Montana:'MT',Nebraska:'NE',Nevada:'NV','New Hampshire':'NH','New Jersey':'NJ','New Mexico':'NM','New York':'NY','North Carolina':'NC','North Dakota':'ND',Ohio:'OH',Oklahoma:'OK',Oregon:'OR',Pennsylvania:'PA','Rhode Island':'RI','South Carolina':'SC','South Dakota':'SD',Tennessee:'TN',Texas:'TX',Utah:'UT',Vermont:'VT',Virginia:'VA',Washington:'WA','West Virginia':'WV',Wisconsin:'WI',Wyoming:'WY'};
-function regMapColor(n,max){if(!n)return '#e8f1ed';const t=max?Math.max(.12,n/max):0;return `hsl(158 48% ${92-54*t}%)`;}
-function regUsMap(context,rows){const counts=new Map();rows.forEach(r=>regStateValues(r).forEach(st=>counts.set(st,(counts.get(st)||0)+1)));const max=Math.max(0,...counts.values()),tileW=58,tileH=38,gap=3,ox=24,oy=20;const tiles=REG_US_STATES.map(name=>({name,abbr:REG_STATE_ABBR[name],pos:REG_STATE_POS[REG_STATE_ABBR[name]],n:counts.get(name)||0})).filter(x=>x.pos).map(x=>{const [cx,cy]=x.pos,x0=ox+cx*(tileW+gap),y0=oy+cy*(tileH+gap);return `<g tabindex="0" class="reg-map-state" onclick="regDrillState('${context}','${x.name}')" onkeydown="if(event.key==='Enter'||event.key===' ')regDrillState('${context}','${x.name}')" role="button" aria-label="${esc(x.name)} ${x.n}筆"><title>${esc(x.name)}：${x.n} 筆登記</title><rect class="state-tile" x="${x0}" y="${y0}" rx="5" width="${tileW}" height="${tileH}" fill="${regMapColor(x.n,max)}"></rect><text x="${x0+tileW/2}" y="${y0+16}" text-anchor="middle">${x.abbr}</text><text x="${x0+tileW/2}" y="${y0+29}" text-anchor="middle">${x.n||'—'}</text></g>`;}).join('');return `<div class="reg-us-map-wrap"><svg class="reg-us-map" viewBox="0 0 820 410" role="img" aria-label="美國各州登記筆數">${tiles}</svg><div class="reg-map-legend"><span>少</span><i></i><span>多</span><span>（點擊州別查看對應登記資料）</span></div></div>`;}
+function regMapColor(n){return !n?'#eef2f3':n<=10?'#deeff4':n<=20?'#a9d6e2':n<=25?'#63aec0':'#176d80';}
+function regMapLegend(){return `<div class="reg-map-legend" aria-label="產品數量圖例"><span class="reg-map-key"><i style="--swatch:#eef2f3"></i>0</span><span class="reg-map-key"><i style="--swatch:#deeff4"></i>1–10</span><span class="reg-map-key"><i style="--swatch:#a9d6e2"></i>11–20</span><span class="reg-map-key"><i style="--swatch:#63aec0"></i>21–25</span><span class="reg-map-key"><i style="--swatch:#176d80"></i>26+</span><span class="reg-map-hint">點有資料的州可篩選登記產品</span></div>`;}
+function regUsMap(context,rows){const counts=new Map();rows.forEach(r=>regStateValues(r).forEach(st=>counts.set(st,(counts.get(st)||0)+1)));const states=REG_US_STATES.map(name=>({name,abbr:REG_STATE_ABBR[name],shape:REG_US_STATE_SHAPES[name],n:counts.get(name)||0})).filter(x=>x.shape);const shapes=states.map(x=>`<path class="reg-state-shape${x.n?' is-active':''}" d="${x.shape.d}" fill="${regMapColor(x.n)}"${x.n?` tabindex="0" role="button" onclick="regDrillState('${context}','${x.name}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();regDrillState('${context}','${x.name}') }" aria-label="${esc(x.name)}：${x.n} 個產品"`:''}><title>${esc(x.name)}：${x.n} 個產品${x.n?'，點擊篩選':''}</title></path>`).join('');const leaders=states.filter(x=>x.shape.anchor&&(x.shape.anchor[0]!==x.shape.label[0]||x.shape.anchor[1]!==x.shape.label[1])).map(x=>`<line class="reg-map-leader" x1="${x.shape.anchor[0]}" y1="${x.shape.anchor[1]}" x2="${x.shape.label[0]-12}" y2="${x.shape.label[1]-4}"/>`).join('');const labels=states.map(x=>{const [cx,cy]=x.shape.label;return `<g class="reg-state-label${x.n?' is-active':''}"${x.n?` tabindex="0" role="button" onclick="regDrillState('${context}','${x.name}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();regDrillState('${context}','${x.name}') }" aria-label="${esc(x.name)}：${x.n} 個產品"`:''}><title>${esc(x.name)}：${x.n} 個產品${x.n?'，點擊篩選':''}</title><text x="${cx}" y="${cy}" text-anchor="middle"><tspan class="state-abbr">${x.abbr}</tspan><tspan class="state-count" x="${cx}" dy="13">${x.n||'—'}</tspan></text></g>`;}).join('');return `<div class="reg-us-map-wrap"><svg class="reg-us-map" viewBox="0 0 975 610" role="group" aria-label="美國地圖，各州產品登記數量">${shapes}<g class="reg-map-leaders">${leaders}</g>${labels}</svg>${regMapLegend()}</div>`;}
 function regDrillState(context,state){const src=regState[context];regState.management={...src,filters:Object.fromEntries(Object.entries(src.filters).map(([k,v])=>[k,[...v]])),drill:null};regState.management.filters.state=[state];regView='products';if(context==='overview')showPage('registration');else{cur=1;render();}document.getElementById('reg-table')?.scrollIntoView({behavior:'smooth',block:'start'});}
 function regRateValue(d,k){return k==='dilution'?[d._dilution?d._dilution+'倍':'未填寫']:regSplit(d['Application Method']);}
-function regDetailMap(r){const items=regStateItems(r);if(!items.length)return '';const active=new Map(items.map(x=>[x.state,x.status]));const tileW=58,tileH=38,gap=3,ox=24,oy=20;const tiles=REG_US_STATES.map(name=>({name,abbr:REG_STATE_ABBR[name],pos:REG_STATE_POS[REG_STATE_ABBR[name]],status:active.get(name)})).filter(x=>x.pos).map(x=>{const [cx,cy]=x.pos,x0=ox+cx*(tileW+gap),y0=oy+cy*(tileH+gap),on=x.status!==undefined;return `<g tabindex="0" role="img" aria-label="${esc(x.name)}${on?'：已登記'+(x.status&&x.status!=='X'?'（'+x.status+'）':''): '：未登記'}"><title>${esc(x.name)}：${on?'已登記'+(x.status&&x.status!=='X'?'（'+x.status+'）':''):'未登記'}</title><rect class="state-tile" x="${x0}" y="${y0}" rx="5" width="${tileW}" height="${tileH}" fill="${on?'#17715e':'#e8f1ed'}"></rect><text x="${x0+tileW/2}" y="${y0+16}" text-anchor="middle">${x.abbr}</text><text x="${x0+tileW/2}" y="${y0+29}" text-anchor="middle">${on?'✓':'—'}</text></g>`;}).join('');return `<section class="reg-detail-map"><h3>登記州地圖</h3><div class="reg-us-map-wrap"><svg class="reg-us-map" viewBox="0 0 820 410" role="img" aria-label="本產品美國登記州地圖">${tiles}</svg><div class="reg-map-legend"><span class="reg-map-active-key"></span><span>深色：已登記州</span><span class="reg-map-inactive-key"></span><span>淺色：其他州</span></div></div></section>`;}
+function regDetailMap(r){const items=regStateItems(r);if(!items.length)return '';const active=new Map(items.map(x=>[x.state,x.status]));const shapes=REG_US_STATES.map(name=>{const shape=REG_US_STATE_SHAPES[name];if(!shape)return '';const status=active.get(name),on=status!==undefined;return `<path class="reg-state-shape${on?' is-registered':''}" d="${shape.d}" fill="${on?'#176d80':'#eef2f3'}"><title>${esc(name)}：${on?'已登記'+(status&&status!=='X'?'（'+status+'）':''):'未登記'}</title></path>`;}).join('');const labels=REG_US_STATES.map(name=>{const shape=REG_US_STATE_SHAPES[name];if(!shape)return '';const status=active.get(name),on=status!==undefined,[cx,cy]=shape.label;return `<g class="reg-state-label"><title>${esc(name)}：${on?'已登記':'未登記'}</title><text x="${cx}" y="${cy}" text-anchor="middle"><tspan class="state-abbr">${REG_STATE_ABBR[name]}</tspan><tspan class="state-count" x="${cx}" dy="13">${on?'✓':'—'}</tspan></text></g>`;}).join('');const leaders=REG_US_STATES.map(name=>{const s=REG_US_STATE_SHAPES[name];if(!s||!s.anchor||(s.anchor[0]===s.label[0]&&s.anchor[1]===s.label[1]))return '';return `<line x1="${s.anchor[0]}" y1="${s.anchor[1]}" x2="${s.label[0]-12}" y2="${s.label[1]-4}" stroke="#60767b" stroke-width="1" vector-effect="non-scaling-stroke"/>`;}).join('');return `<section class="reg-detail-map"><h3>登記州地圖</h3><div class="reg-us-map-wrap"><svg class="reg-us-map" viewBox="0 0 975 610" role="img" aria-label="本產品美國登記州地圖">${shapes}<g>${leaders}</g>${labels}</svg><div class="reg-map-legend"><span class="reg-map-key"><i style="--swatch:#176d80"></i>已登記</span><span class="reg-map-key"><i style="--swatch:#eef2f3"></i>其他州</span></div></div></section>`;}
 function regValues(r,k){
  const direct={country:r.c,company:r.raw['登記公司'],category:r.raw['登記類別'],status:r.s,deadline:r.raw._deadline_status,item:r.raw['登記品目'],material:r.raw['Raw Materials'],state:regStateValues(r),crop:r.raw.Crops,ingredient:r.raw['Active Ingredient(s)'],form:r.raw['Formulation / Product Form'],use:r.raw['Use Type'],site:r.raw['Crops / Use Sites']};
  if(k==='state')return direct.state.length?direct.state:(regGroup(r)==='fert'&&/美國|USA/i.test(String(r.c||r.raw['國別']||''))?['未填寫']:[]);
